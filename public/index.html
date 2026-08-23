@@ -1,0 +1,1080 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LED Matrix Designer</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,400,0..1,0" rel="stylesheet">
+  <style>
+    :root {
+      /* Material 3 dark scheme (violet primary, pink tertiary) */
+      --md-primary: #D0BCFF;
+      --md-on-primary: #381E72;
+      --md-primary-container: #4F378B;
+      --md-on-primary-container: #EADDFF;
+      --md-secondary: #CCC2DC;
+      --md-on-secondary: #332D41;
+      --md-secondary-container: #4A4458;
+      --md-on-secondary-container: #E8DEF8;
+      --md-tertiary: #EFB8C8;
+      --md-on-tertiary: #492532;
+      --md-tertiary-container: #633B48;
+      --md-on-tertiary-container: #FFD8E4;
+      --md-error: #F2B8B5;
+      --md-on-error: #601410;
+      --md-error-container: #8C1D18;
+      --md-on-error-container: #F9DEDC;
+      --md-success-container: #1F4620;
+      --md-on-success-container: #A6F5AA;
+      --md-surface-dim: #131016;
+      --md-surface: #141218;
+      --md-surface-container-lowest: #0C0A0F;
+      --md-surface-container-low: #1D1B20;
+      --md-surface-container: #221F26;
+      --md-surface-container-high: #2C2930;
+      --md-surface-container-highest: #37333B;
+      --md-on-surface: #E6E0E9;
+      --md-on-surface-variant: #CAC4D0;
+      --md-outline: #938F99;
+      --md-outline-variant: #49454F;
+      --md-scrim: rgba(0, 0, 0, 0.5);
+      --md-shape-xs: 4px;
+      --md-shape-sm: 8px;
+      --md-shape-md: 12px;
+      --md-shape-lg: 16px;
+      --md-shape-xl: 28px;
+      --md-elevation-1: 0 1px 2px rgba(0,0,0,0.3), 0 1px 3px 1px rgba(0,0,0,0.15);
+      --md-elevation-3: 0 4px 8px rgba(0,0,0,0.3), 0 1px 3px rgba(0,0,0,0.3);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Roboto', system-ui, sans-serif;
+      background:
+        radial-gradient(1200px 600px at 20% -10%, rgba(208,188,255,0.08), transparent),
+        radial-gradient(1000px 500px at 100% 0%, rgba(239,184,200,0.06), transparent),
+        var(--md-surface-dim);
+      min-height: 100vh;
+      color: var(--md-on-surface);
+    }
+    .material-symbols-outlined {
+      font-family: 'Material Symbols Outlined';
+      font-weight: normal;
+      font-style: normal;
+      font-size: 20px;
+      line-height: 1;
+      letter-spacing: normal;
+      text-transform: none;
+      display: inline-block;
+      white-space: nowrap;
+      word-wrap: normal;
+      direction: ltr;
+      -webkit-font-feature-settings: 'liga';
+      -webkit-font-smoothing: antialiased;
+      user-select: none;
+    }
+    input[type="range"] { accent-color: var(--md-primary); }
+    input[type="text"], input[type="number"], select {
+      font-family: 'Roboto', sans-serif;
+      color-scheme: dark;
+    }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--md-surface-container-highest); border-radius: 8px; }
+
+    .m3-app-bar {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 12px 20px; background: var(--md-surface-container-low);
+      border-radius: var(--md-shape-lg); margin-bottom: 16px;
+    }
+    .m3-headline { margin: 0; font-size: 20px; font-weight: 500; color: var(--md-on-surface); letter-spacing: 0; }
+    .m3-subtitle { margin: 2px 0 0; font-size: 12px; color: var(--md-on-surface-variant); }
+    .m3-eyebrow { margin: 0 0 10px; font-size: 11px; font-weight: 500; color: var(--md-on-surface-variant); text-transform: uppercase; letter-spacing: 0.1em; }
+
+    .m3-panel { background: var(--md-surface-container); border-radius: var(--md-shape-lg); padding: 16px; }
+    .m3-panel-flush { background: var(--md-surface-container); border-radius: var(--md-shape-lg); }
+
+    .m3-btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      height: 40px; padding: 0 20px; border-radius: var(--md-shape-xl);
+      font: 500 13px/20px 'Roboto', sans-serif; letter-spacing: 0.1px; border: none; cursor: pointer;
+      transition: background-color .15s ease, box-shadow .15s ease, opacity .15s ease;
+      white-space: nowrap;
+    }
+    .m3-btn:disabled { opacity: 0.38; cursor: not-allowed; }
+    .m3-btn-filled { background: var(--md-primary); color: var(--md-on-primary); }
+    .m3-btn-filled:hover:not(:disabled) { box-shadow: var(--md-elevation-1); }
+    .m3-btn-tonal { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
+    .m3-btn-tonal:hover:not(:disabled) { box-shadow: var(--md-elevation-1); }
+    .m3-btn-success { background: var(--md-success-container); color: var(--md-on-success-container); }
+    .m3-btn-success:hover:not(:disabled) { box-shadow: var(--md-elevation-1); }
+    .m3-btn-danger { background: var(--md-error-container); color: var(--md-on-error-container); }
+    .m3-btn-danger:hover:not(:disabled) { box-shadow: var(--md-elevation-1); }
+    .m3-btn-outlined { background: transparent; color: var(--md-on-surface); border: 1px solid var(--md-outline); }
+    .m3-btn-outlined:hover:not(:disabled) { background: rgba(230,224,233,0.08); }
+    .m3-btn-sm { height: 30px; padding: 0 12px; font-size: 11px; border-radius: var(--md-shape-xl); }
+
+    .m3-icon-btn {
+      width: 40px; height: 40px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+      background: transparent; border: none; color: var(--md-on-surface-variant); cursor: pointer;
+      transition: background-color .15s ease, color .15s ease;
+    }
+    .m3-icon-btn:hover:not(:disabled) { background: rgba(230,224,233,0.08); color: var(--md-on-surface); }
+    .m3-icon-btn:disabled { opacity: 0.38; cursor: not-allowed; }
+    .m3-icon-btn-sm { width: 32px; height: 32px; }
+
+    .m3-fab {
+      display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 16px 0 14px;
+      border-radius: var(--md-shape-lg); background: var(--md-primary-container); color: var(--md-on-primary-container);
+      border: none; cursor: pointer; font: 500 13px 'Roboto', sans-serif; box-shadow: var(--md-elevation-1);
+      transition: box-shadow .15s ease;
+    }
+    .m3-fab:hover { box-shadow: var(--md-elevation-3); }
+
+    .m3-field-label { display: block; font-size: 11px; font-weight: 500; color: var(--md-on-surface-variant); margin-bottom: 4px; letter-spacing: 0.05em; text-transform: uppercase; }
+    .m3-input {
+      width: 100%; height: 40px; padding: 0 12px; border-radius: var(--md-shape-sm);
+      border: 1px solid var(--md-outline); background: var(--md-surface-container-lowest); color: var(--md-on-surface);
+      font: 14px 'Roboto', sans-serif; outline: none; transition: border-color .15s ease, box-shadow .15s ease;
+    }
+    .m3-input:focus { border: 2px solid var(--md-primary); padding: 0 11px; }
+    .m3-input::placeholder { color: var(--md-outline); }
+
+    .m3-tool-btn {
+      width: 100%; aspect-ratio: 1; border-radius: var(--md-shape-md); background: var(--md-surface-container-high);
+      border: none; color: var(--md-on-surface-variant); cursor: pointer; display: flex; align-items: center; justify-content: center;
+      transition: background-color .15s ease, color .15s ease;
+    }
+    .m3-tool-btn:hover { background: var(--md-surface-container-highest); }
+    .m3-tool-btn.active { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
+
+    .m3-list-item { padding: 10px 12px; margin-bottom: 4px; border-radius: var(--md-shape-md); cursor: pointer; transition: background-color .15s ease; position: relative; }
+    .m3-list-item:hover { background: rgba(230,224,233,0.06); }
+    .m3-list-item.selected { background: var(--md-secondary-container); }
+
+    .m3-chip {
+      display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: var(--md-shape-xl);
+      font: 500 9px 'Roboto', sans-serif; letter-spacing: 0.05em; background: var(--md-tertiary-container); color: var(--md-on-tertiary-container);
+    }
+
+    .m3-switch { width: 44px; height: 26px; border-radius: var(--md-shape-xl); background: var(--md-surface-container-highest); border: 2px solid var(--md-outline); position: relative; cursor: pointer; transition: background-color .2s ease, border-color .2s ease; flex-shrink: 0; }
+    .m3-switch.on { background: var(--md-primary); border-color: var(--md-primary); }
+    .m3-switch .thumb { position: absolute; top: 50%; left: 6px; width: 12px; height: 12px; border-radius: 50%; background: var(--md-outline); transform: translateY(-50%); transition: left .2s ease, width .2s ease, height .2s ease, background-color .2s ease; }
+    .m3-switch.on .thumb { left: 22px; width: 18px; height: 18px; background: var(--md-on-primary); }
+
+    .m3-scrim { position: fixed; inset: 0; background: var(--md-scrim); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+    .m3-dialog { background: var(--md-surface-container-high); border-radius: var(--md-shape-xl); padding: 24px; box-shadow: var(--md-elevation-3); }
+    .m3-divider { height: 1px; background: var(--md-outline-variant); border: none; margin: 12px 0; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useRef, useEffect } = React;
+
+const Icon = ({ name, size }) => (
+  <span className="material-symbols-outlined" style={size ? { fontSize: size } : undefined}>{name}</span>
+);
+
+const CANVAS_WIDTH = 64;
+const CANVAS_HEIGHT = 32;
+const PIXEL_SIZE = 12;
+
+const FONTS = {
+  tiny: {
+    height: 5, width: 3,
+    chars: {
+      'A': [0b010, 0b101, 0b111, 0b101, 0b101],
+      'B': [0b110, 0b101, 0b110, 0b101, 0b110],
+      'C': [0b011, 0b100, 0b100, 0b100, 0b011],
+      'D': [0b110, 0b101, 0b101, 0b101, 0b110],
+      'E': [0b111, 0b100, 0b110, 0b100, 0b111],
+      'F': [0b111, 0b100, 0b110, 0b100, 0b100],
+      'G': [0b011, 0b100, 0b101, 0b101, 0b011],
+      'H': [0b101, 0b101, 0b111, 0b101, 0b101],
+      'I': [0b111, 0b010, 0b010, 0b010, 0b111],
+      'J': [0b001, 0b001, 0b001, 0b101, 0b010],
+      'K': [0b101, 0b110, 0b100, 0b110, 0b101],
+      'L': [0b100, 0b100, 0b100, 0b100, 0b111],
+      'M': [0b101, 0b111, 0b111, 0b101, 0b101],
+      'N': [0b101, 0b111, 0b111, 0b111, 0b101],
+      'O': [0b010, 0b101, 0b101, 0b101, 0b010],
+      'P': [0b110, 0b101, 0b110, 0b100, 0b100],
+      'Q': [0b010, 0b101, 0b101, 0b110, 0b011],
+      'R': [0b110, 0b101, 0b110, 0b101, 0b101],
+      'S': [0b011, 0b100, 0b010, 0b001, 0b110],
+      'T': [0b111, 0b010, 0b010, 0b010, 0b010],
+      'U': [0b101, 0b101, 0b101, 0b101, 0b011],
+      'V': [0b101, 0b101, 0b101, 0b101, 0b010],
+      'W': [0b101, 0b101, 0b111, 0b111, 0b101],
+      'X': [0b101, 0b101, 0b010, 0b101, 0b101],
+      'Y': [0b101, 0b101, 0b010, 0b010, 0b010],
+      'Z': [0b111, 0b001, 0b010, 0b100, 0b111],
+      '0': [0b010, 0b101, 0b101, 0b101, 0b010],
+      '1': [0b010, 0b110, 0b010, 0b010, 0b111],
+      '2': [0b110, 0b001, 0b010, 0b100, 0b111],
+      '3': [0b110, 0b001, 0b010, 0b001, 0b110],
+      '4': [0b101, 0b101, 0b111, 0b001, 0b001],
+      '5': [0b111, 0b100, 0b110, 0b001, 0b110],
+      '6': [0b011, 0b100, 0b110, 0b101, 0b010],
+      '7': [0b111, 0b001, 0b010, 0b010, 0b010],
+      '8': [0b010, 0b101, 0b010, 0b101, 0b010],
+      '9': [0b010, 0b101, 0b011, 0b001, 0b110],
+      ' ': [0b000, 0b000, 0b000, 0b000, 0b000],
+      '.': [0b000, 0b000, 0b000, 0b000, 0b010],
+      ',': [0b000, 0b000, 0b000, 0b010, 0b100],
+      '!': [0b010, 0b010, 0b010, 0b000, 0b010],
+      '?': [0b110, 0b001, 0b010, 0b000, 0b010],
+      ':': [0b000, 0b010, 0b000, 0b010, 0b000],
+      '-': [0b000, 0b000, 0b111, 0b000, 0b000],
+    }
+  },
+  small: {
+    height: 7, width: 5,
+    chars: {
+      'A': [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+      'B': [0b11110, 0b10001, 0b11110, 0b10001, 0b10001, 0b10001, 0b11110],
+      'C': [0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110],
+      'D': [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
+      'E': [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
+      'F': [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
+      'G': [0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110],
+      'H': [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+      'I': [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111],
+      'J': [0b00111, 0b00001, 0b00001, 0b00001, 0b10001, 0b10001, 0b01110],
+      'K': [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
+      'L': [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+      'M': [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001],
+      'N': [0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001],
+      'O': [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+      'P': [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000],
+      'Q': [0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b01110, 0b00001],
+      'R': [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
+      'S': [0b01110, 0b10001, 0b10000, 0b01110, 0b00001, 0b10001, 0b01110],
+      'T': [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
+      'U': [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+      'V': [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100],
+      'W': [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001],
+      'X': [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
+      'Y': [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
+      'Z': [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111],
+      'a': [0b00000, 0b00000, 0b01110, 0b00001, 0b01111, 0b10001, 0b01111],
+      'b': [0b10000, 0b10000, 0b10110, 0b11001, 0b10001, 0b10001, 0b11110],
+      'c': [0b00000, 0b00000, 0b01110, 0b10000, 0b10000, 0b10001, 0b01110],
+      'd': [0b00001, 0b00001, 0b01101, 0b10011, 0b10001, 0b10001, 0b01111],
+      'e': [0b00000, 0b00000, 0b01110, 0b10001, 0b11111, 0b10000, 0b01110],
+      'f': [0b00110, 0b01001, 0b01000, 0b11100, 0b01000, 0b01000, 0b01000],
+      'g': [0b00000, 0b01111, 0b10001, 0b10001, 0b01111, 0b00001, 0b01110],
+      'h': [0b10000, 0b10000, 0b10110, 0b11001, 0b10001, 0b10001, 0b10001],
+      'i': [0b00100, 0b00000, 0b01100, 0b00100, 0b00100, 0b00100, 0b01110],
+      'j': [0b00010, 0b00000, 0b00110, 0b00010, 0b00010, 0b10010, 0b01100],
+      'k': [0b10000, 0b10000, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010],
+      'l': [0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+      'm': [0b00000, 0b00000, 0b11010, 0b10101, 0b10101, 0b10001, 0b10001],
+      'n': [0b00000, 0b00000, 0b10110, 0b11001, 0b10001, 0b10001, 0b10001],
+      'o': [0b00000, 0b00000, 0b01110, 0b10001, 0b10001, 0b10001, 0b01110],
+      'p': [0b00000, 0b00000, 0b11110, 0b10001, 0b11110, 0b10000, 0b10000],
+      'q': [0b00000, 0b00000, 0b01101, 0b10011, 0b01111, 0b00001, 0b00001],
+      'r': [0b00000, 0b00000, 0b10110, 0b11001, 0b10000, 0b10000, 0b10000],
+      's': [0b00000, 0b00000, 0b01110, 0b10000, 0b01110, 0b00001, 0b11110],
+      't': [0b01000, 0b01000, 0b11100, 0b01000, 0b01000, 0b01001, 0b00110],
+      'u': [0b00000, 0b00000, 0b10001, 0b10001, 0b10001, 0b10011, 0b01101],
+      'v': [0b00000, 0b00000, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100],
+      'w': [0b00000, 0b00000, 0b10001, 0b10001, 0b10101, 0b10101, 0b01010],
+      'x': [0b00000, 0b00000, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001],
+      'y': [0b00000, 0b00000, 0b10001, 0b10001, 0b01111, 0b00001, 0b01110],
+      'z': [0b00000, 0b00000, 0b11111, 0b00010, 0b00100, 0b01000, 0b11111],
+      '0': [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
+      '1': [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+      '2': [0b01110, 0b10001, 0b00001, 0b00110, 0b01000, 0b10000, 0b11111],
+      '3': [0b01110, 0b10001, 0b00001, 0b00110, 0b00001, 0b10001, 0b01110],
+      '4': [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010],
+      '5': [0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110],
+      '6': [0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110],
+      '7': [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000],
+      '8': [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
+      '9': [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100],
+      ' ': [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000],
+      '.': [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100],
+      ',': [0b00000, 0b00000, 0b00000, 0b00000, 0b00110, 0b00100, 0b01000],
+      '!': [0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00000, 0b00100],
+      '?': [0b01110, 0b10001, 0b00010, 0b00100, 0b00100, 0b00000, 0b00100],
+      ':': [0b00000, 0b01100, 0b01100, 0b00000, 0b01100, 0b01100, 0b00000],
+      '-': [0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000],
+    }
+  },
+  large: {
+    height: 10, width: 7,
+    chars: {
+      'A': [0b0011100, 0b0100010, 0b1000001, 0b1000001, 0b1111111, 0b1000001, 0b1000001, 0b1000001, 0b1000001, 0b1000001],
+      'B': [0b1111110, 0b1000001, 0b1000001, 0b1111110, 0b1000001, 0b1000001, 0b1000001, 0b1000001, 0b1000001, 0b1111110],
+      'C': [0b0111110, 0b1000001, 0b1000000, 0b1000000, 0b1000000, 0b1000000, 0b1000000, 0b1000000, 0b1000001, 0b0111110],
+      'D': [0b1111100, 0b1000010, 0b1000001, 0b1000001, 0b1000001, 0b1000001, 0b1000001, 0b1000001, 0b1000010, 0b1111100],
+      'E': [0b1111111, 0b1000000, 0b1000000, 0b1000000, 0b1111110, 0b1000000, 0b1000000, 0b1000000, 0b1000000, 0b1111111],
+      'F': [0b1111111, 0b1000000, 0b1000000, 0b1000000, 0b1111110, 0b1000000, 0b1000000, 0b1000000, 0b1000000, 0b1000000],
+      '0': [0b0111110, 0b1000001, 0b1000011, 0b1000101, 0b1001001, 0b1010001, 0b1100001, 0b1000001, 0b1000001, 0b0111110],
+      '1': [0b0001000, 0b0011000, 0b0101000, 0b0001000, 0b0001000, 0b0001000, 0b0001000, 0b0001000, 0b0001000, 0b0111110],
+      ' ': [0b0000000, 0b0000000, 0b0000000, 0b0000000, 0b0000000, 0b0000000, 0b0000000, 0b0000000, 0b0000000, 0b0000000],
+      ':': [0b0000000, 0b0000000, 0b0011000, 0b0011000, 0b0000000, 0b0000000, 0b0011000, 0b0011000, 0b0000000, 0b0000000],
+    }
+  }
+};
+
+const App = () => {
+  // Screen management
+  const [screens, setScreens] = useState([]);
+  const [activeScreenId, setActiveScreenId] = useState(null);
+  const [currentScreenId, setCurrentScreenId] = useState(null);
+  const [loading, setLoading] = useState(true);
+  
+  // Editor state
+  const [frames, setFrames] = useState([[]]);
+  const [currentFrame, setCurrentFrame] = useState(0);
+  const [selectedTool, setSelectedTool] = useState('pixel');
+  const [currentColor, setCurrentColor] = useState({ r: 255, g: 0, b: 0 });
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [startPos, setStartPos] = useState(null);
+  const [previewElement, setPreviewElement] = useState(null);
+  const [selectedElement, setSelectedElement] = useState(null);
+  const [textInput, setTextInput] = useState('Hello');
+  const [fontSize, setFontSize] = useState('small');
+  const [filled, setFilled] = useState(false);
+  const [screenName, setScreenName] = useState('Untitled');
+  const [dragMode, setDragMode] = useState(null);
+  const [dragStart, setDragStart] = useState(null);
+  const [originalElement, setOriginalElement] = useState(null);
+  const [isAnimated, setIsAnimated] = useState(false);
+  const [frameDelay, setFrameDelay] = useState(200);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [saveStatus, setSaveStatus] = useState('');
+  const [showNewDialog, setShowNewDialog] = useState(false);
+  const [newScreenName, setNewScreenName] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
+  const [deviceUrl, setDeviceUrl] = useState('');
+  const [deviceUrlInput, setDeviceUrlInput] = useState('');
+  const [lastPush, setLastPush] = useState(null);
+  const [settingsStatus, setSettingsStatus] = useState('');
+  const canvasRef = useRef(null);
+  const framesRef = useRef(frames);
+  framesRef.current = frames;
+
+  const elements = frames[currentFrame] || [];
+  const setElements = (updater) => {
+    setFrames(prev => {
+      const newFrames = [...prev];
+      newFrames[currentFrame] = typeof updater === 'function' ? updater(newFrames[currentFrame] || []) : updater;
+      return newFrames;
+    });
+  };
+
+  // Load screens on mount
+  useEffect(() => {
+    fetchScreens();
+    fetchSettings();
+  }, []);
+
+  const fetchSettings = async () => {
+    try {
+      const res = await fetch('/api/settings');
+      const settings = await res.json();
+      setDeviceUrl(settings.deviceUrl || '');
+      setDeviceUrlInput(settings.deviceUrl || '');
+      setLastPush(settings.lastPush || null);
+    } catch (e) {
+      console.error('Failed to fetch settings:', e);
+    }
+  };
+
+  const saveSettings = async () => {
+    setSettingsStatus('Saving...');
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceUrl: deviceUrlInput })
+      });
+      const settings = await res.json();
+      setDeviceUrl(settings.deviceUrl || '');
+      setSettingsStatus('Saved');
+      setTimeout(() => setSettingsStatus(''), 1500);
+    } catch (e) {
+      console.error('Failed to save settings:', e);
+      setSettingsStatus('Failed to save');
+    }
+  };
+
+  const pushNow = async () => {
+    setSettingsStatus('Pushing...');
+    try {
+      const res = await fetch('/api/push', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        setSettingsStatus(data.error || 'Push failed');
+        return;
+      }
+      setLastPush(data.push);
+      setSettingsStatus(data.push?.success ? 'Pushed' : (data.push?.error || 'Push failed'));
+      setTimeout(() => setSettingsStatus(''), 2000);
+    } catch (e) {
+      console.error('Failed to push:', e);
+      setSettingsStatus('Push failed');
+    }
+  };
+
+  const fetchScreens = async () => {
+    try {
+      const res = await fetch('/api/screens');
+      const data = await res.json();
+      setScreens(data.screens);
+      setActiveScreenId(data.activeScreenId);
+      if (data.activeScreenId && !currentScreenId) {
+        loadScreen(data.activeScreenId);
+      } else {
+        setLoading(false);
+      }
+    } catch (e) {
+      console.error('Failed to fetch screens:', e);
+      setLoading(false);
+    }
+  };
+
+  const loadScreen = async (id) => {
+    try {
+      setLoading(true);
+      const res = await fetch(`/api/screens/${id}`);
+      const screen = await res.json();
+      setCurrentScreenId(screen.id);
+      setScreenName(screen.name);
+      setFrames(screen.frames || [[]]);
+      setIsAnimated(screen.isAnimated || false);
+      setFrameDelay(screen.frameDelay || 200);
+      setCurrentFrame(0);
+      setSelectedElement(null);
+      setLoading(false);
+    } catch (e) {
+      console.error('Failed to load screen:', e);
+      setLoading(false);
+    }
+  };
+
+  const saveScreen = async () => {
+    if (!currentScreenId) {
+      createNewScreen();
+      return;
+    }
+    
+    setSaveStatus('Saving...');
+    try {
+      const res = await fetch(`/api/screens/${currentScreenId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: screenName, frames, isAnimated, frameDelay })
+      });
+      const saved = await res.json();
+      if (saved.push) setLastPush(saved.push);
+      setSaveStatus('Saved!');
+      fetchScreens();
+      setTimeout(() => setSaveStatus(''), 2000);
+    } catch (e) {
+      setSaveStatus('Error saving');
+      console.error('Failed to save:', e);
+    }
+  };
+
+  const createNewScreen = async (name) => {
+    const screenNameToUse = name || newScreenName || 'Untitled';
+    try {
+      const res = await fetch('/api/screens', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          name: screenNameToUse, 
+          frames: name ? [[]] : frames, 
+          isAnimated: name ? false : isAnimated, 
+          frameDelay: name ? 200 : frameDelay 
+        })
+      });
+      const screen = await res.json();
+      setCurrentScreenId(screen.id);
+      setScreenName(screen.name);
+      if (name) {
+        setFrames([[]]);
+        setIsAnimated(false);
+        setFrameDelay(200);
+      }
+      fetchScreens();
+      setShowNewDialog(false);
+      setNewScreenName('');
+    } catch (e) {
+      console.error('Failed to create screen:', e);
+    }
+  };
+
+  const deleteScreen = async (id) => {
+    if (!confirm('Delete this screen?')) return;
+    try {
+      await fetch(`/api/screens/${id}`, { method: 'DELETE' });
+      if (currentScreenId === id) {
+        setCurrentScreenId(null);
+        setFrames([[]]);
+        setScreenName('Untitled');
+      }
+      fetchScreens();
+    } catch (e) {
+      console.error('Failed to delete:', e);
+    }
+  };
+
+  const setActive = async (id) => {
+    try {
+      const res = await fetch(`/api/active/${id}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.push) setLastPush(data.push);
+      setActiveScreenId(id);
+      fetchScreens();
+    } catch (e) {
+      console.error('Failed to set active:', e);
+    }
+  };
+
+  // Animation playback
+  useEffect(() => {
+    if (!isPlaying) return;
+    if (framesRef.current.length <= 1) return;
+    const interval = setInterval(() => {
+      setCurrentFrame(prev => (prev + 1) % framesRef.current.length);
+    }, frameDelay);
+    return () => clearInterval(interval);
+  }, [isPlaying, frameDelay]);
+
+  const tools = [
+    { id: 'select', name: 'Select', icon: 'arrow_selector_tool' },
+    { id: 'pixel', name: 'Pixel', icon: 'brush' },
+    { id: 'line', name: 'Line', icon: 'timeline' },
+    { id: 'rect', name: 'Rect', icon: 'crop_square' },
+    { id: 'circle', name: 'Circle', icon: 'circle' },
+    { id: 'text', name: 'Text', icon: 'text_fields' },
+    { id: 'eraser', name: 'Eraser', icon: 'ink_eraser' },
+  ];
+
+  const presetColors = [
+    { r: 255, g: 0, b: 0 }, { r: 0, g: 255, b: 0 }, { r: 0, g: 0, b: 255 },
+    { r: 255, g: 255, b: 0 }, { r: 255, g: 0, b: 255 }, { r: 0, g: 255, b: 255 },
+    { r: 255, g: 255, b: 255 }, { r: 255, g: 102, b: 0 }, { r: 128, g: 0, b: 255 },
+    { r: 0, g: 128, b: 0 },
+  ];
+
+  const getMousePos = (e) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(CANVAS_WIDTH - 1, Math.floor((e.clientX - rect.left) / PIXEL_SIZE))),
+      y: Math.max(0, Math.min(CANVAS_HEIGHT - 1, Math.floor((e.clientY - rect.top) / PIXEL_SIZE)))
+    };
+  };
+
+  const getTextPixels = (text, x, y, fontName, color) => {
+    const font = FONTS[fontName] || FONTS.small;
+    const pixels = [];
+    let cursorX = x;
+    for (const char of text.toUpperCase()) {
+      const charData = font.chars[char] || font.chars[' '];
+      if (charData) {
+        for (let row = 0; row < font.height; row++) {
+          for (let col = 0; col < font.width; col++) {
+            if ((charData[row] >> (font.width - 1 - col)) & 1) {
+              const px = cursorX + col;
+              const py = y + row;
+              if (px >= 0 && px < CANVAS_WIDTH && py >= 0 && py < CANVAS_HEIGHT) {
+                pixels.push({ x: px, y: py, color });
+              }
+            }
+          }
+        }
+      }
+      cursorX += font.width + 1;
+    }
+    return pixels;
+  };
+
+  const getElementPixels = (el) => {
+    const pixels = [];
+    if (el.type === 'pixel') {
+      pixels.push({ x: el.x, y: el.y, color: el.color });
+    } else if (el.type === 'text') {
+      return getTextPixels(el.text, el.x, el.y, el.fontSize, el.color);
+    } else if (el.type === 'line') {
+      const points = getLinePoints(el.x1, el.y1, el.x2, el.y2);
+      points.forEach(p => pixels.push({ x: p.x, y: p.y, color: el.color }));
+    } else if (el.type === 'rect') {
+      for (let y = 0; y < el.height; y++) {
+        for (let x = 0; x < el.width; x++) {
+          if (el.filled || x === 0 || x === el.width - 1 || y === 0 || y === el.height - 1) {
+            const px = el.x + x, py = el.y + y;
+            if (px >= 0 && px < CANVAS_WIDTH && py >= 0 && py < CANVAS_HEIGHT) {
+              pixels.push({ x: px, y: py, color: el.color });
+            }
+          }
+        }
+      }
+    } else if (el.type === 'circle') {
+      for (let y = -el.r; y <= el.r; y++) {
+        for (let x = -el.r; x <= el.r; x++) {
+          const dist = Math.sqrt(x * x + y * y);
+          if (el.filled ? dist <= el.r : Math.abs(dist - el.r) < 1) {
+            const px = el.cx + x, py = el.cy + y;
+            if (px >= 0 && px < CANVAS_WIDTH && py >= 0 && py < CANVAS_HEIGHT) {
+              pixels.push({ x: px, y: py, color: el.color });
+            }
+          }
+        }
+      }
+    }
+    return pixels;
+  };
+
+  const getElementBounds = (el) => {
+    if (el.type === 'pixel') return { x: el.x, y: el.y, width: 1, height: 1 };
+    if (el.type === 'rect') return { x: el.x, y: el.y, width: el.width, height: el.height };
+    if (el.type === 'circle') return { x: el.cx - el.r, y: el.cy - el.r, width: el.r * 2 + 1, height: el.r * 2 + 1 };
+    if (el.type === 'line') return { x: Math.min(el.x1, el.x2), y: Math.min(el.y1, el.y2), width: Math.abs(el.x2 - el.x1) + 1, height: Math.abs(el.y2 - el.y1) + 1 };
+    if (el.type === 'text') {
+      const font = FONTS[el.fontSize];
+      return { x: el.x, y: el.y, width: el.text.length * (font.width + 1), height: font.height };
+    }
+    return { x: 0, y: 0, width: 1, height: 1 };
+  };
+
+  const getHandleAtPos = (pos, el) => {
+    if (!el) return null;
+    const bounds = getElementBounds(el);
+    if (el.type === 'line') {
+      if (Math.abs(pos.x - el.x1) <= 1 && Math.abs(pos.y - el.y1) <= 1) return 'line-start';
+      if (Math.abs(pos.x - el.x2) <= 1 && Math.abs(pos.y - el.y2) <= 1) return 'line-end';
+    }
+    if (el.type === 'rect' || el.type === 'circle') {
+      const { x, y, width, height } = bounds;
+      if (Math.abs(pos.x - (x + width)) <= 1 && Math.abs(pos.y - (y + height)) <= 1) return 'resize-br';
+      if (Math.abs(pos.x - x) <= 1 && Math.abs(pos.y - y) <= 1) return 'resize-tl';
+    }
+    return null;
+  };
+
+  const isInsideElement = (pos, el) => getElementPixels(el).some(p => p.x === pos.x && p.y === pos.y);
+
+  const handleMouseDown = (e) => {
+    if (isPlaying) return;
+    const pos = getMousePos(e);
+    setIsDrawing(true);
+    setStartPos(pos);
+
+    if (selectedTool === 'select') {
+      if (selectedElement) {
+        const handle = getHandleAtPos(pos, selectedElement);
+        if (handle) {
+          setDragMode(handle);
+          setDragStart(pos);
+          setOriginalElement({ ...selectedElement });
+          return;
+        }
+      }
+      const clicked = [...elements].reverse().find(el => isInsideElement(pos, el));
+      if (clicked) {
+        setSelectedElement(clicked);
+        setDragMode('move');
+        setDragStart(pos);
+        setOriginalElement({ ...clicked });
+      } else {
+        setSelectedElement(null);
+      }
+    } else if (selectedTool === 'pixel') {
+      addElement({ type: 'pixel', x: pos.x, y: pos.y, color: { ...currentColor } });
+    } else if (selectedTool === 'text') {
+      addElement({ type: 'text', x: pos.x, y: pos.y, text: textInput, fontSize, color: { ...currentColor } });
+    } else if (selectedTool === 'eraser') {
+      removeElementAt(pos);
+    }
+  };
+
+  const handleMouseMove = (e) => {
+    if (isPlaying || !isDrawing || !startPos) return;
+    const pos = getMousePos(e);
+
+    if (selectedTool === 'select' && dragMode && originalElement) {
+      const dx = pos.x - dragStart.x, dy = pos.y - dragStart.y;
+      setElements(prev => prev.map(el => {
+        if (el.id !== originalElement.id) return el;
+        if (dragMode === 'move') {
+          if (el.type === 'pixel') return { ...el, x: originalElement.x + dx, y: originalElement.y + dy };
+          if (el.type === 'rect' || el.type === 'text') return { ...el, x: originalElement.x + dx, y: originalElement.y + dy };
+          if (el.type === 'circle') return { ...el, cx: originalElement.cx + dx, cy: originalElement.cy + dy };
+          if (el.type === 'line') return { ...el, x1: originalElement.x1 + dx, y1: originalElement.y1 + dy, x2: originalElement.x2 + dx, y2: originalElement.y2 + dy };
+        }
+        if (el.type === 'rect' && dragMode === 'resize-br') return { ...el, width: Math.max(1, originalElement.width + dx), height: Math.max(1, originalElement.height + dy) };
+        if (el.type === 'rect' && dragMode === 'resize-tl') return { ...el, x: originalElement.x + dx, y: originalElement.y + dy, width: Math.max(1, originalElement.width - dx), height: Math.max(1, originalElement.height - dy) };
+        if (el.type === 'circle' && dragMode.startsWith('resize')) return { ...el, r: Math.max(1, Math.round(Math.sqrt(Math.pow(pos.x - originalElement.cx, 2) + Math.pow(pos.y - originalElement.cy, 2)))) };
+        if (el.type === 'line' && dragMode === 'line-start') return { ...el, x1: pos.x, y1: pos.y };
+        if (el.type === 'line' && dragMode === 'line-end') return { ...el, x2: pos.x, y2: pos.y };
+        return el;
+      }));
+    } else if (selectedTool === 'pixel') {
+      if (!elements.find(el => el.type === 'pixel' && el.x === pos.x && el.y === pos.y)) {
+        addElement({ type: 'pixel', x: pos.x, y: pos.y, color: { ...currentColor } });
+      }
+    } else if (selectedTool === 'line') {
+      setPreviewElement({ type: 'line', x1: startPos.x, y1: startPos.y, x2: pos.x, y2: pos.y, color: { ...currentColor } });
+    } else if (selectedTool === 'rect') {
+      setPreviewElement({ type: 'rect', x: Math.min(startPos.x, pos.x), y: Math.min(startPos.y, pos.y), width: Math.abs(pos.x - startPos.x) + 1, height: Math.abs(pos.y - startPos.y) + 1, filled, color: { ...currentColor } });
+    } else if (selectedTool === 'circle') {
+      setPreviewElement({ type: 'circle', cx: startPos.x, cy: startPos.y, r: Math.round(Math.sqrt(Math.pow(pos.x - startPos.x, 2) + Math.pow(pos.y - startPos.y, 2))), filled, color: { ...currentColor } });
+    } else if (selectedTool === 'eraser') {
+      removeElementAt(pos);
+    }
+  };
+
+  const handleMouseUp = () => {
+    if (previewElement) { addElement(previewElement); setPreviewElement(null); }
+    setIsDrawing(false);
+    setStartPos(null);
+    setDragMode(null);
+  };
+
+  const addElement = (el) => setElements(prev => [...prev, { ...el, id: Date.now() + Math.random() }]);
+  const removeElementAt = (pos) => setElements(prev => prev.filter(el => !isInsideElement(pos, el)));
+  const deleteSelected = () => { if (selectedElement) { setElements(prev => prev.filter(el => el.id !== selectedElement.id)); setSelectedElement(null); } };
+
+  const getLinePoints = (x1, y1, x2, y2) => {
+    const points = [];
+    const dx = Math.abs(x2 - x1), dy = Math.abs(y2 - y1);
+    const sx = x1 < x2 ? 1 : -1, sy = y1 < y2 ? 1 : -1;
+    let err = dx - dy, x = x1, y = y1;
+    while (true) {
+      points.push({ x, y });
+      if (x === x2 && y === y2) break;
+      const e2 = 2 * err;
+      if (e2 > -dy) { err -= dy; x += sx; }
+      if (e2 < dx) { err += dx; y += sy; }
+    }
+    return points;
+  };
+
+  const renderElement = (el, isPreview = false) => {
+    const pixels = getElementPixels(el);
+    const isSelected = selectedElement?.id === el.id;
+    return (
+      <React.Fragment key={el.id || 'preview'}>
+        {pixels.map((p, i) => (
+          <div key={`${el.id}-${i}`} style={{
+            position: 'absolute', left: p.x * PIXEL_SIZE, top: p.y * PIXEL_SIZE,
+            width: PIXEL_SIZE - 1, height: PIXEL_SIZE - 1, borderRadius: 2,
+            backgroundColor: `rgba(${p.color.r}, ${p.color.g}, ${p.color.b}, ${isPreview ? 0.6 : 1})`,
+            boxShadow: `0 0 ${PIXEL_SIZE/2}px rgba(${p.color.r}, ${p.color.g}, ${p.color.b}, 0.5)`,
+          }} />
+        ))}
+        {isSelected && !isPlaying && (() => {
+          const b = getElementBounds(el);
+          return <div style={{ position: 'absolute', left: b.x * PIXEL_SIZE - 2, top: b.y * PIXEL_SIZE - 2, width: b.width * PIXEL_SIZE + 4, height: b.height * PIXEL_SIZE + 4, border: '2px dashed #00ffff', pointerEvents: 'none' }} />;
+        })()}
+      </React.Fragment>
+    );
+  };
+
+  const addFrame = () => { setFrames(prev => [...prev, []]); setCurrentFrame(frames.length); setIsAnimated(true); };
+  const duplicateFrame = () => { setFrames(prev => [...prev, JSON.parse(JSON.stringify(prev[currentFrame]))]); setCurrentFrame(frames.length); setIsAnimated(true); };
+  const deleteFrame = () => { if (frames.length <= 1) return; setFrames(prev => prev.filter((_, i) => i !== currentFrame)); setCurrentFrame(Math.min(currentFrame, frames.length - 2)); if (frames.length <= 2) setIsAnimated(false); };
+
+  useEffect(() => {
+    const handleKey = (e) => {
+      if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') return;
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedElement) deleteSelected();
+      if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveScreen(); }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [selectedElement, frames, screenName]);
+
+  useEffect(() => {
+    if (selectedElement) {
+      const updated = elements.find(el => el.id === selectedElement.id);
+      if (updated) setSelectedElement(updated);
+    }
+  }, [elements]);
+
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: 'var(--md-primary)', fontSize: 14 }}>
+        Loading…
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: 20, maxWidth: 1400, margin: '0 auto' }}>
+      {/* Top App Bar */}
+      <div className="m3-app-bar">
+        <div>
+          <h1 className="m3-headline">LED Matrix Designer</h1>
+          <p className="m3-subtitle">ESP32 Dynamic Display Server</p>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {saveStatus && <span style={{ fontSize: 12, color: 'var(--md-on-success-container)' }}>{saveStatus}</span>}
+          <button className="m3-btn m3-btn-success" onClick={saveScreen}><Icon name="save" size={18} /> Save</button>
+          <button className="m3-fab" onClick={() => setShowNewDialog(true)}><Icon name="add" size={20} /> New</button>
+          <button
+            className="m3-icon-btn"
+            onClick={() => { setDeviceUrlInput(deviceUrl); setShowSettings(true); }}
+            title="Display settings"
+            style={deviceUrl ? { color: 'var(--md-on-success-container)', background: 'var(--md-success-container)' } : undefined}
+          >
+            <Icon name="settings" />
+          </button>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr 240px', gap: 16, alignItems: 'start' }}>
+        {/* Left - Screen List */}
+        <div className="m3-panel" style={{ maxHeight: 'calc(100vh - 120px)', overflowY: 'auto' }}>
+          <h3 className="m3-eyebrow">Screens</h3>
+          {screens.length === 0 ? (
+            <p style={{ color: 'var(--md-outline)', fontSize: 12 }}>No screens yet</p>
+          ) : (
+            screens.map(s => (
+              <div key={s.id} onClick={() => loadScreen(s.id)} className={`m3-list-item${currentScreenId === s.id ? ' selected' : ''}`}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 13, color: 'var(--md-on-surface)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
+                  {activeScreenId === s.id && <span className="m3-chip">LIVE</span>}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--md-on-surface-variant)', marginTop: 2 }}>
+                  {s.isAnimated ? `${s.frameCount} frames` : 'Static'}
+                </div>
+                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                  <button onClick={(e) => { e.stopPropagation(); setActive(s.id); }} className={`m3-btn m3-btn-sm ${activeScreenId === s.id ? 'm3-btn-tonal' : 'm3-btn-outlined'}`}>
+                    {activeScreenId === s.id ? <><Icon name="check_circle" size={14} /> Active</> : 'Set Active'}
+                  </button>
+                  <button onClick={(e) => { e.stopPropagation(); deleteScreen(s.id); }} className="m3-icon-btn m3-icon-btn-sm">
+                    <Icon name="delete" size={16} />
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+          <hr className="m3-divider" />
+          <div style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', lineHeight: 1.8 }}>
+            <div style={{ marginBottom: 4, color: 'var(--md-outline)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 500 }}>ESP32 Endpoints</div>
+            <div>/api/esp/pixels</div>
+            <div>/api/esp/binary</div>
+            <div>/api/esp/status</div>
+          </div>
+        </div>
+
+        {/* Center - Canvas */}
+        <div>
+          <div className="m3-panel" style={{ marginBottom: 12 }}>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+              <input type="text" value={screenName} onChange={(e) => setScreenName(e.target.value)} className="m3-input" style={{ flex: 1 }} placeholder="Screen name" />
+              <span className="m3-chip">Frame {currentFrame + 1}/{frames.length}</span>
+            </div>
+            <div style={{ background: 'var(--md-surface-container-highest)', borderRadius: 'var(--md-shape-xl)', padding: 14, display: 'flex', justifyContent: 'center' }}>
+              <div
+                ref={canvasRef}
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
+                onMouseLeave={handleMouseUp}
+                style={{
+                  position: 'relative', width: CANVAS_WIDTH * PIXEL_SIZE, height: CANVAS_HEIGHT * PIXEL_SIZE,
+                  background: '#000', borderRadius: 'var(--md-shape-sm)', cursor: isPlaying ? 'not-allowed' : 'crosshair',
+                  boxShadow: 'inset 0 0 0 1px var(--md-outline-variant)', overflow: 'hidden',
+                }}
+              >
+                <svg style={{ position: 'absolute', width: '100%', height: '100%', pointerEvents: 'none' }}>
+                  {Array.from({ length: CANVAS_WIDTH + 1 }).map((_, i) => <line key={`v${i}`} x1={i * PIXEL_SIZE} y1={0} x2={i * PIXEL_SIZE} y2={CANVAS_HEIGHT * PIXEL_SIZE} stroke="#1a1a3a" strokeWidth={0.5} />)}
+                  {Array.from({ length: CANVAS_HEIGHT + 1 }).map((_, i) => <line key={`h${i}`} x1={0} y1={i * PIXEL_SIZE} x2={CANVAS_WIDTH * PIXEL_SIZE} y2={i * PIXEL_SIZE} stroke="#1a1a3a" strokeWidth={0.5} />)}
+                </svg>
+                {elements.map(el => renderElement(el))}
+                {previewElement && renderElement(previewElement, true)}
+              </div>
+            </div>
+          </div>
+
+          {/* Animation Controls */}
+          <div className="m3-panel" style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div
+              className={`m3-switch${isAnimated ? ' on' : ''}`}
+              onClick={() => setIsAnimated(!isAnimated)}
+              role="switch"
+              aria-checked={isAnimated}
+              title="Animated"
+            >
+              <div className="thumb" />
+            </div>
+            <span style={{ fontSize: 12, color: 'var(--md-on-surface-variant)' }}>Animated</span>
+            <div style={{ width: 1, height: 24, background: 'var(--md-outline-variant)' }} />
+            <div style={{ display: 'flex', gap: 4 }}>
+              {frames.map((_, i) => (
+                <button key={i} onClick={() => { setCurrentFrame(i); setIsPlaying(false); }} className={`m3-btn m3-btn-sm ${currentFrame === i ? 'm3-btn-tonal' : 'm3-btn-outlined'}`} style={{ minWidth: 30, padding: 0 }}>
+                  {i + 1}
+                </button>
+              ))}
+            </div>
+            <button className="m3-icon-btn m3-icon-btn-sm" onClick={addFrame} title="Add frame"><Icon name="add" size={18} /></button>
+            <button className="m3-icon-btn m3-icon-btn-sm" onClick={duplicateFrame} title="Duplicate frame"><Icon name="content_copy" size={16} /></button>
+            <button className="m3-icon-btn m3-icon-btn-sm" onClick={deleteFrame} disabled={frames.length <= 1} title="Delete frame"><Icon name="delete" size={16} /></button>
+            <button className={`m3-icon-btn ${isPlaying ? 'm3-icon-btn-sm' : 'm3-icon-btn-sm'}`} style={isPlaying ? { background: 'var(--md-secondary-container)', color: 'var(--md-on-secondary-container)' } : undefined} onClick={() => setIsPlaying(!isPlaying)} title={isPlaying ? 'Pause' : 'Play'}>
+              <Icon name={isPlaying ? 'pause' : 'play_arrow'} size={18} />
+            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
+              <input type="number" value={frameDelay} onChange={(e) => setFrameDelay(Math.max(50, parseInt(e.target.value) || 200))} className="m3-input" style={{ width: 70, height: 32 }} />
+              <span style={{ fontSize: 11, color: 'var(--md-on-surface-variant)' }}>ms / frame</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Right - Tools */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div className="m3-panel">
+            <h3 className="m3-eyebrow">Tools</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
+              {tools.map(t => (
+                <button key={t.id} onClick={() => setSelectedTool(t.id)} title={t.name} className={`m3-tool-btn${selectedTool === t.id ? ' active' : ''}`}>
+                  <Icon name={t.icon} size={20} />
+                </button>
+              ))}
+            </div>
+            {(selectedTool === 'rect' || selectedTool === 'circle') && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 12, color: 'var(--md-on-surface-variant)', cursor: 'pointer' }}>
+                <div className={`m3-switch${filled ? ' on' : ''}`} onClick={() => setFilled(!filled)} style={{ width: 36, height: 22 }}>
+                  <div className="thumb" style={{ width: filled ? 14 : 10, height: filled ? 14 : 10, left: filled ? 17 : 5 }} />
+                </div>
+                Filled
+              </label>
+            )}
+            {selectedTool === 'text' && (
+              <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <input type="text" value={textInput} onChange={(e) => setTextInput(e.target.value)} className="m3-input" placeholder="Text" />
+                <select value={fontSize} onChange={(e) => setFontSize(e.target.value)} className="m3-input">
+                  <option value="tiny">Tiny (3×5)</option>
+                  <option value="small">Small (5×7)</option>
+                  <option value="large">Large (7×10)</option>
+                </select>
+              </div>
+            )}
+          </div>
+
+          <div className="m3-panel">
+            <h3 className="m3-eyebrow">Color</h3>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {presetColors.map((c, i) => (
+                <div key={i} onClick={() => setCurrentColor(c)} style={{
+                  width: 22, height: 22, borderRadius: 'var(--md-shape-xs)', cursor: 'pointer',
+                  backgroundColor: `rgb(${c.r}, ${c.g}, ${c.b})`,
+                  outline: currentColor.r === c.r && currentColor.g === c.g && currentColor.b === c.b ? '2px solid var(--md-primary)' : '2px solid transparent',
+                  outlineOffset: 2,
+                }} />
+              ))}
+            </div>
+            <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {['r', 'g', 'b'].map(c => (
+                <div key={c} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', width: 12, fontWeight: 500 }}>{c.toUpperCase()}</span>
+                  <input type="range" min="0" max="255" value={currentColor[c]} onChange={(e) => setCurrentColor(prev => ({ ...prev, [c]: parseInt(e.target.value) }))} style={{ flex: 1 }} />
+                  <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', width: 24, textAlign: 'right' }}>{currentColor[c]}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {selectedElement && (
+            <div className="m3-panel">
+              <h3 className="m3-eyebrow">Selected: {selectedElement.type}</h3>
+              {selectedElement.type === 'text' && (
+                <input type="text" value={selectedElement.text} onChange={(e) => setElements(prev => prev.map(el => el.id === selectedElement.id ? { ...el, text: e.target.value } : el))} className="m3-input" style={{ width: '100%', marginBottom: 10 }} />
+              )}
+              <button onClick={deleteSelected} className="m3-btn m3-btn-danger" style={{ width: '100%' }}><Icon name="delete" size={16} /> Delete</button>
+            </div>
+          )}
+
+          <div className="m3-panel" style={{ flex: 1, overflow: 'auto' }}>
+            <h3 className="m3-eyebrow">Elements ({elements.length})</h3>
+            {elements.map(el => (
+              <div key={el.id} onClick={() => { setSelectedElement(el); setSelectedTool('select'); }} style={{
+                padding: '6px 8px', marginBottom: 2, borderRadius: 'var(--md-shape-sm)', cursor: 'pointer', fontSize: 11,
+                background: selectedElement?.id === el.id ? 'var(--md-secondary-container)' : 'transparent',
+                color: selectedElement?.id === el.id ? 'var(--md-on-secondary-container)' : 'var(--md-on-surface-variant)',
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              }}>
+                <span>{el.type === 'text' ? `T "${el.text.slice(0,6)}"` : el.type}</span>
+                <div style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: `rgb(${el.color.r}, ${el.color.g}, ${el.color.b})` }} />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Display Settings Dialog */}
+      {showSettings && (
+        <div className="m3-scrim" onClick={() => setShowSettings(false)}>
+          <div className="m3-dialog" style={{ width: 400 }} onClick={e => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 500 }}>Connected Display</h3>
+            <p style={{ margin: '0 0 16px', fontSize: 12, color: 'var(--md-on-surface-variant)', lineHeight: 1.5 }}>
+              The base URL of your ESP32's designer port (default 8080). The active screen is pushed to
+              <code style={{ margin: '0 4px', color: 'var(--md-primary)' }}>{'{url}/api/pixels'}</code>
+              whenever you Save or Set Active.
+            </p>
+            <label className="m3-field-label">Device URL</label>
+            <input
+              type="text"
+              value={deviceUrlInput}
+              onChange={(e) => setDeviceUrlInput(e.target.value)}
+              placeholder="http://192.168.1.50:8080"
+              className="m3-input"
+              style={{ width: '100%', marginBottom: 16 }}
+              autoFocus
+            />
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+              <button className="m3-btn m3-btn-success" style={{ flex: 1 }} onClick={saveSettings}>Save</button>
+              <button className="m3-btn m3-btn-outlined" style={{ flex: 1 }} onClick={pushNow} disabled={!deviceUrl}>Push Now</button>
+            </div>
+            {settingsStatus && <div style={{ fontSize: 12, color: 'var(--md-on-surface-variant)', marginBottom: 8 }}>{settingsStatus}</div>}
+            {lastPush && (
+              <div style={{
+                padding: 10, borderRadius: 'var(--md-shape-sm)', fontSize: 11,
+                background: lastPush.success ? 'var(--md-success-container)' : 'var(--md-error-container)',
+                color: lastPush.success ? 'var(--md-on-success-container)' : 'var(--md-on-error-container)',
+              }}>
+                Last push: {lastPush.success ? 'OK' : `Failed (${lastPush.error})`} — {new Date(lastPush.timestamp).toLocaleTimeString()}
+              </div>
+            )}
+            <div style={{ marginTop: 16, textAlign: 'right' }}>
+              <button className="m3-btn m3-btn-outlined" onClick={() => setShowSettings(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New Screen Dialog */}
+      {showNewDialog && (
+        <div className="m3-scrim" onClick={() => setShowNewDialog(false)}>
+          <div className="m3-dialog" style={{ width: 320 }} onClick={e => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 16px', fontSize: 18, fontWeight: 500 }}>New Screen</h3>
+            <label className="m3-field-label">Name</label>
+            <input type="text" value={newScreenName} onChange={(e) => setNewScreenName(e.target.value)} placeholder="Screen name" className="m3-input" style={{ width: '100%', marginBottom: 20 }} autoFocus />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button className="m3-btn m3-btn-outlined" onClick={() => setShowNewDialog(false)}>Cancel</button>
+              <button className="m3-btn m3-btn-filled" onClick={() => createNewScreen(newScreenName || 'Untitled')}>Create</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+</body>
+</html>

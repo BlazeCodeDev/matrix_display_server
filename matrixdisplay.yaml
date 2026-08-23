@@ -1,0 +1,933 @@
+esphome:
+  name: matrix-display
+  friendly_name: Matrix Display
+  includes:
+    - matrix_designer.h          # <-- the companion file, same folder
+  on_boot:
+    priority: -100
+    then:
+      - lambda: 'matrix_designer_init();'
+
+external_components:
+  - source: github://TillFleisch/ESPHome-HUB75-MatrixDisplayWrapper@main
+    components: [hub75_matrix_display]
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+    version: recommended
+
+ota:
+  - platform: esphome
+    password: "11e9bc802886dcfe5cc0f7fe1e71a00e"
+
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: "LeGjKLDUHdvS1WPKIm5PFbeE3CCcUHPge48WxknCk6w="
+
+wifi:
+  ssid: "404 Network unavailable"
+  password: "85498036873100493624"
+
+http_request:
+  id: http_request_id
+  useragent: esphome/matrix-display
+  timeout: 10s
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+text:
+  - platform: template
+    name: "Custom Text"
+    id: custom_text
+    mode: text
+    optimistic: true
+    initial_value: "Hello World!"
+
+sensor:
+  - platform: homeassistant
+    entity_id: weather.forecast_home
+    attribute: temperature
+    id: weather_temp
+    internal: true
+  - platform: adc
+    pin: GPIO3
+    name: "LDR Voltage"
+    id: ldr_sensor
+    update_interval: 0.5s
+    attenuation: auto
+    unit_of_measurement: "V"
+    accuracy_decimals: 2
+    filters:
+      - exponential_moving_average:
+          alpha: 0.1
+          send_every: 2
+      - sliding_window_moving_average:
+          window_size: 5
+          send_every: 1
+
+text_sensor:
+  - platform: homeassistant
+    entity_id: weather.forecast_home
+    id: weather_condition
+    internal: true
+
+select:
+  - platform: template
+    name: "Display Preset"
+    id: display_preset
+    optimistic: true
+    options: ["Digital Clock", "Date & Time", "Weather", "Fire", "Pong Game", "DVD Logo", "Plane Tracker", "Designer"]
+    initial_option: "Digital Clock"
+
+number:
+  - platform: template
+    name: "Brightness"
+    id: brightness_control
+    min_value: 0
+    max_value: 255
+    step: 1
+    initial_value: 128
+    optimistic: true
+  - platform: template
+    name: "Animation Speed"
+    id: anim_speed
+    min_value: 1
+    max_value: 10
+    step: 1
+    initial_value: 5
+    optimistic: true
+  - platform: template
+    name: "Plane Detection Radius"
+    id: plane_radius
+    min_value: 1
+    max_value: 20
+    step: 0.5
+    initial_value: 10
+    unit_of_measurement: "km"
+    optimistic: true
+  - platform: template
+    name: "Cycle Interval"
+    id: cycle_interval
+    min_value: 5
+    max_value: 300
+    step: 5
+    initial_value: 300
+    unit_of_measurement: "s"
+    optimistic: true
+  - platform: template
+    name: "Min Brightness"
+    id: min_brightness
+    min_value: 10
+    max_value: 100
+    step: 5
+    initial_value: 30
+    optimistic: true
+  - platform: template
+    name: "Max Brightness"
+    id: max_brightness
+    min_value: 100
+    max_value: 255
+    step: 5
+    initial_value: 255
+    optimistic: true
+  - platform: template
+    name: "Auto-off Threshold"
+    id: auto_off_threshold
+    min_value: 0.0
+    max_value: 3.3
+    step: 0.01
+    initial_value: 0.1
+    unit_of_measurement: "V"
+    optimistic: true
+
+switch:
+  - platform: template
+    name: "Display Power"
+    id: display_power
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+  - platform: template
+    name: "Auto Cycle"
+    id: auto_cycle
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+  - platform: template
+    name: "Auto Brightness"
+    id: auto_brightness
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+  - platform: template
+    name: "Plane Tracking"
+    id: plane_tracking
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+globals:
+  - id: current_preset_index
+    type: int
+    initial_value: '0'
+  - id: last_cycle_time
+    type: unsigned long
+    initial_value: '0'
+  - id: target_brightness
+    type: float
+    initial_value: '128.0'
+  - id: current_brightness
+    type: float
+    initial_value: '128.0'
+  - id: last_ldr_check
+    type: unsigned long
+    initial_value: '0'
+  - id: plane_detected
+    type: bool
+    initial_value: 'false'
+  - id: plane_callsign
+    type: std::string
+    initial_value: '""'
+  - id: plane_lat
+    type: float
+    initial_value: '0.0'
+  - id: plane_lon
+    type: float
+    initial_value: '0.0'
+  - id: plane_heading
+    type: float
+    initial_value: '0.0'
+  - id: last_plane_check
+    type: unsigned long
+    initial_value: '0'
+
+interval:
+  - interval: 1s
+    then:
+      - lambda: |-
+          if (!id(auto_cycle).state) return;
+          unsigned long now = millis();
+          if (now - id(last_cycle_time) >= (id(cycle_interval).state * 1000)) {
+            id(last_cycle_time) = now;
+            const char* presets[] = {"Digital Clock", "Date & Time", "Weather", "Fire", "Pong Game", "DVD Logo", "Plane Tracker"};
+            id(current_preset_index) = (id(current_preset_index) + 1) % 7;
+            auto call = id(display_preset).make_call();
+            call.set_option(presets[id(current_preset_index)]);
+            call.perform();
+          }
+
+  # Auto brightness based on LDR - only adjusts brightness, never controls power
+  - interval: 500ms
+    then:
+      - lambda: |-
+          if (!id(auto_brightness).state) return;
+          
+          unsigned long now = millis();
+          if (now - id(last_ldr_check) < 2000) return;
+          
+          if (!id(ldr_sensor).has_state()) return;
+          
+          float voltage = id(ldr_sensor).state;
+          float threshold = id(auto_off_threshold).state;
+          
+          // Map voltage to brightness (logarithmic scale)
+          float min_voltage = threshold;
+          float max_voltage = 3.3;
+          float min_bright = id(min_brightness).state;
+          float max_bright = id(max_brightness).state;
+          
+          // Clamp voltage value
+          float clamped_voltage = std::min(std::max(voltage, min_voltage), max_voltage);
+          
+          // Logarithmic mapping for more natural brightness response
+          float log_voltage = log10(clamped_voltage * 10);
+          float log_min = log10(min_voltage * 10);
+          float log_max = log10(max_voltage * 10);
+          
+          float normalized = (log_voltage - log_min) / (log_max - log_min);
+          id(target_brightness) = min_bright + (normalized * (max_bright - min_bright));
+          
+          id(last_ldr_check) = now;
+
+  # Smooth brightness transitions
+  - interval: 50ms
+    then:
+      - lambda: |-
+          if (!id(auto_brightness).state) {
+            float manual_brightness = id(brightness_control).state;
+            if (id(current_brightness) != manual_brightness) {
+              id(current_brightness) = manual_brightness;
+              id(target_brightness) = manual_brightness;
+            }
+            return;
+          }
+          
+          // Smooth transition to target brightness (10% per step)
+          float diff = id(target_brightness) - id(current_brightness);
+          if (std::abs(diff) > 1.0) {
+            id(current_brightness) += diff * 0.1;
+            
+            auto call = id(brightness_control).make_call();
+            call.set_value((int)id(current_brightness));
+            call.perform();
+          }
+
+  # Plane detection timeout (clear after 30 seconds)
+  - interval: 1s
+    then:
+      - lambda: |-
+          if (id(plane_detected)) {
+            unsigned long now = millis();
+            if (now - id(last_plane_check) > 30000) {
+              id(plane_detected) = false;
+              id(plane_callsign) = "";
+            }
+          }
+
+  # Fetch plane data from OpenSky Network API (with bounding box for efficiency)
+  - interval: 10s
+    then:
+      - if:
+          condition:
+            switch.is_on: plane_tracking
+          then:
+            - http_request.get:
+                url: !lambda |-
+                  const float MY_LAT = 52.211988;
+                  const float MY_LON = 10.519407;
+                  float radius_km = id(plane_radius).state;
+                  
+                  float lat_delta = radius_km / 111.0;
+                  float lon_delta = radius_km / (111.0 * cos(MY_LAT * 0.0174533));
+                  
+                  static char url[256];
+                  snprintf(url, sizeof(url),
+                           "https://opensky-network.org/api/states/all?lamin=%.4f&lomin=%.4f&lamax=%.4f&lomax=%.4f",
+                           MY_LAT - lat_delta, MY_LON - lon_delta,
+                           MY_LAT + lat_delta, MY_LON + lon_delta);
+                  return (std::string)url;
+                capture_response: true
+                max_response_buffer_size: 10000
+                on_response:
+                  then:
+                    - lambda: |-
+                        if ((int)response->status_code != 200) {
+                          ESP_LOGW("plane", "HTTP failed: %d", (int)response->status_code);
+                          id(plane_detected) = false;
+                          return;
+                        }
+                        
+                        ESP_LOGI("plane", "Checking planes...");
+                        
+                        const float MY_LAT = 52.211988;
+                        const float MY_LON = 10.519407;
+                        float radius_km = id(plane_radius).state;
+                        
+                        // Get response body as string
+                        std::string resp_body = body;
+                        if (resp_body.length() > 10000) {
+                          resp_body = resp_body.substr(0, 10000);
+                        }
+                        
+                        // Parse JSON
+                        size_t states_pos = resp_body.find("\"states\":");
+                        if (states_pos == std::string::npos) {
+                          id(plane_detected) = false;
+                          return;
+                        }
+                        
+                        size_t first_plane = resp_body.find("[[", states_pos);
+                        if (first_plane == std::string::npos) {
+                          id(plane_detected) = false;
+                          ESP_LOGD("plane", "No planes in area");
+                          return;
+                        }
+                        
+                        // Extract first plane data
+                        size_t pos = first_plane + 2;
+                        int field_idx = 0;
+                        std::string field_value = "";
+                        bool in_quotes = false;
+                        
+                        std::string callsign = "";
+                        float lon = 0, lat = 0, heading = 0;
+                        
+                        while (pos < resp_body.length() && field_idx < 12) {
+                          char c = resp_body[pos];
+                          
+                          if (c == '"') {
+                            in_quotes = !in_quotes;
+                            if (!in_quotes && field_idx == 1) {
+                              callsign = field_value;
+                              callsign.erase(0, callsign.find_first_not_of(" \t\r\n"));
+                              callsign.erase(callsign.find_last_not_of(" \t\r\n") + 1);
+                            }
+                          } else if (in_quotes) {
+                            field_value += c;
+                          } else if (c == ',' || c == ']') {
+                            if (!in_quotes && field_value.length() > 0 && field_value != "null") {
+                              if (field_idx == 5) lon = atof(field_value.c_str());
+                              else if (field_idx == 6) lat = atof(field_value.c_str());
+                              else if (field_idx == 10) heading = atof(field_value.c_str());
+                            }
+                            field_value = "";
+                            field_idx++;
+                            if (c == ']') break;
+                          } else if (c != ' ' && c != '\n' && c != '\r' && c != '\t') {
+                            field_value += c;
+                          }
+                          pos++;
+                        }
+                        
+                        // Calculate distance
+                        if (lat != 0 && lon != 0 && callsign.length() > 0) {
+                          float lat1 = MY_LAT * 0.0174533;
+                          float lon1 = MY_LON * 0.0174533;
+                          float lat2 = lat * 0.0174533;
+                          float lon2 = lon * 0.0174533;
+                          
+                          float dlat = lat2 - lat1;
+                          float dlon = lon2 - lon1;
+                          
+                          float a = sin(dlat/2) * sin(dlat/2) + cos(lat1) * cos(lat2) * sin(dlon/2) * sin(dlon/2);
+                          float c_val = 2 * asin(sqrt(a));
+                          float distance_km = 6371 * c_val;
+                          
+                          if (distance_km < radius_km) {
+                            id(plane_detected) = true;
+                            id(plane_callsign) = callsign;
+                            id(plane_lat) = lat;
+                            id(plane_lon) = lon;
+                            id(plane_heading) = heading;
+                            id(last_plane_check) = millis();
+                            
+                            ESP_LOGI("plane", "✈ %s at %.2f km, %.0f°", callsign.c_str(), distance_km, heading);
+                          } else {
+                            id(plane_detected) = false;
+                          }
+                        } else {
+                          id(plane_detected) = false;
+                        }
+
+font:
+  - file:
+      url: "https://github.com/trip5/Matrix-Fonts/raw/main/6-series/MatrixLight6.ttf"
+      type: web
+    id: jb_tiny
+    size: 6
+  - file:
+      url: "https://github.com/trip5/Matrix-Fonts/raw/main/8-series/MatrixLight8.ttf"
+      type: web
+    id: jb_small
+    size: 8
+  - file:
+      url: "https://github.com/trip5/Matrix-Fonts/raw/main/8-series/MatrixChunky8.ttf"
+      type: web
+    id: jb_medium
+    size: 8
+  - file:
+      url: "https://github.com/trip5/Matrix-Fonts/raw/main/8-series/MatrixChunky8.ttf"
+      type: web
+    id: jb_huge
+    size: 8
+  - file: "https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/fonts/materialdesignicons-webfont.ttf"
+    id: icon_font
+    size: 16
+    glyphs: ["\U000F0599", "\U000F0590", "\U000F0596", "\U000F0591", "\U000F070E", "\U000F0593"]
+
+display:
+  - platform: hub75_matrix_display
+    id: led_matrix
+    width: 64
+    height: 32
+    chain_length: 1
+    driver: FM6126A
+    rotation: 180
+    R1_pin: 37   
+    G1_pin: 35   
+    B1_pin: 15   
+    R2_pin: 36   
+    G2_pin: 39    
+    B2_pin: 16
+    A_pin: 45
+    B_pin: 1
+    C_pin: 48
+    D_pin: 2
+    LAT_pin: 38
+    OE_pin: 21
+    CLK_pin: 47
+    update_interval: 40ms
+
+    lambda: |-
+      // Keine Rotation - Display direkt verwenden (ist um 180° gedreht)
+      auto& rot = it;
+      
+      float br = id(brightness_control).state / 255.0;
+      int speed = id(anim_speed).state;
+      static int frame = 0;
+      frame++;
+
+      auto hsv_to_rgb = [&](float h, float s, float v) -> Color {
+        int i = int(h / 60.0f) % 6;
+        float f = h / 60.0f - i;
+        float p = v * (1.0f - s);
+        float q = v * (1.0f - s * f);
+        float t = v * (1.0f - s * (1.0f - f));
+        float r, g, b;
+        switch (i) {
+          case 0: r = v; g = t; b = p; break;
+          case 1: r = q; g = v; b = p; break;
+          case 2: r = p; g = v; b = t; break;
+          case 3: r = p; g = q; b = v; break;
+          case 4: r = t; g = p; b = v; break;
+          case 5: r = v; g = p; b = q; break;
+          default: r = 0; g = 0; b = 0; break;
+        }
+        return Color(uint8_t(r * 255), uint8_t(g * 255), uint8_t(b * 255));
+      };
+      
+      if (!id(display_power).state) { it.clear(); return; }
+      
+      // Define colors first (used by both plane display and regular presets)
+      Color main_c = Color(0, uint8_t(255*br), uint8_t(150*br));
+      Color white_c = Color(uint8_t(255*br), uint8_t(255*br), uint8_t(255*br));
+      Color warn_c = Color(uint8_t(255*br), uint8_t(100*br), 0);
+      Color dim_c = Color(uint8_t(40*br), uint8_t(40*br), uint8_t(40*br));
+      
+      // Plane tracking override - show plane screen when plane detected
+      if (id(plane_tracking).state && id(plane_detected) && id(plane_callsign).length() > 0) {
+        id(last_plane_check) = millis();
+        
+        // Draw arrow at top showing plane position relative to display
+        // Display heading is East (90°), calculate relative angle
+        float display_heading = 90.0;
+        float relative_angle = id(plane_heading) - display_heading;
+        
+        // Normalize angle to -180 to 180
+        while (relative_angle > 180) relative_angle -= 360;
+        while (relative_angle < -180) relative_angle += 360;
+        
+        // Map angle to X position (center is 32, range 10-54)
+        int arrow_x = 32 + (int)(relative_angle / 180.0 * 22.0);
+        arrow_x = std::min(std::max(arrow_x, 10), 54);
+        
+        // Draw arrow pointing down
+        Color arrow_c = Color(uint8_t(255*br), uint8_t(200*br), 0);
+        it.filled_rectangle(arrow_x-1, 0, 3, 2, arrow_c);
+        it.draw_pixel_at(arrow_x, 2, arrow_c);
+        
+        // Draw heading text at bottom
+        char heading_text[16];
+        snprintf(heading_text, sizeof(heading_text), "%.0f°", id(plane_heading));
+        
+        // Display callsign (flight number) - centered, large
+        std::string callsign = id(plane_callsign);
+        it.print(32, 10, id(jb_huge), main_c, display::TextAlign::TOP_CENTER, callsign.c_str());
+        
+        // Display heading below callsign
+        it.print(32, 22, id(jb_small), white_c, display::TextAlign::TOP_CENTER, heading_text);
+        
+        return;
+      }
+      
+      auto preset = id(display_preset).current_option();
+      it.clear();
+
+      if (preset == "Digital Clock") {
+        auto time = id(ha_time).now();
+        if (time.is_valid()) {
+          // Large pixel-drawn digits (5x7 each) for HH:MM
+          int hours = time.hour;
+          int mins = time.minute;
+          int digits[4] = {hours / 10, hours % 10, mins / 10, mins % 10};
+          
+          // 5x7 digit bitmaps (each row is a byte, 5 bits used)
+          static const uint8_t font5x7[10][7] = {
+            {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E}, // 0
+            {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E}, // 1
+            {0x0E, 0x11, 0x01, 0x06, 0x08, 0x10, 0x1F}, // 2
+            {0x0E, 0x11, 0x01, 0x06, 0x01, 0x11, 0x0E}, // 3
+            {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02}, // 4
+            {0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E}, // 5
+            {0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E}, // 6
+            {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08}, // 7
+            {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E}, // 8
+            {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C}, // 9
+          };
+          
+          // Positions: 4 digits + colon, centered on 64px width
+          // Each digit 5px wide + 2px gap = 7px per digit, colon 1px + 2px gaps
+          // Total: 5+2 + 5+2 + 1+2 + 5+2 + 5 = 29px, start at x=(64-29)/2 = 17
+          int x_positions[4] = {5, 12, 23, 30};
+          int y_start = 4;
+          
+          for (int d = 0; d < 4; d++) {
+            for (int row = 0; row < 7; row++) {
+              for (int col = 0; col < 5; col++) {
+                if (font5x7[digits[d]][row] & (0x10 >> col)) {
+                  it.draw_pixel_at(x_positions[d] + col, y_start + row, main_c);
+                }
+              }
+            }
+          }
+          
+          // Blinking colon
+          if (time.second % 2 == 0) {
+            it.draw_pixel_at(20, y_start + 2, main_c);
+            it.draw_pixel_at(20, y_start + 4, main_c);
+          }
+          
+          // Date below in small font
+          it.strftime(32, 14, id(jb_tiny), white_c, display::TextAlign::TOP_CENTER, "%d.%m.%Y", time);
+          
+          // Seconds bar at bottom
+          int sec_width = (time.second * 54) / 59;
+          it.line(5, 23, 5 + sec_width, 23, dim_c);
+        }
+      }
+      else if (preset == "Date & Time") {
+        auto time = id(ha_time).now();
+        if (time.is_valid()) {
+          it.strftime(32, 2, id(jb_tiny), warn_c, display::TextAlign::TOP_CENTER, "%A", time);
+          it.strftime(32, 10, id(jb_medium), main_c, display::TextAlign::TOP_CENTER, "%d %b", time);
+          it.strftime(32, 22, id(jb_small), white_c, display::TextAlign::TOP_CENTER, "%H:%M:%S", time);
+        }
+      }
+      else if (preset == "Weather") {
+        std::string cond = id(weather_condition).state;
+        std::transform(cond.begin(), cond.end(), cond.begin(), ::tolower);
+        Color ic = Color(255*br, 200*br, 0); const char* code = "\U000F0599"; 
+        
+        if (cond.find("rain") != std::string::npos) { code = "\U000F0596"; ic = Color(80*br, 150*br, 255*br); }
+        else if (cond.find("cloud") != std::string::npos) { code = "\U000F0590"; ic = white_c; }
+        
+        it.print(6, 3, id(icon_font), ic, code);
+        
+        if (id(weather_temp).has_state()) {
+          float temp_val = id(weather_temp).state;
+          it.printf(36, 3, id(jb_medium), white_c, display::TextAlign::TOP_CENTER, "%.0f", temp_val);
+          it.print(46, 3, id(jb_tiny), warn_c, "°C");
+          
+          Color bar_color = (temp_val < 15) ? Color(0, 100*br, 255*br) : (temp_val > 25) ? Color(255*br, 50*br, 0) : warn_c;
+          int bar_h = (int)std::min(std::max((temp_val / 40.0f) * 18.0f, 0.0f), 18.0f);
+          it.line(61, 23, 61, 5, dim_c); 
+          it.line(61, 23, 61, 23 - bar_h, bar_color);
+        }
+        
+        int tw = cond.length() * 6;
+        int sx = (tw > 56) ? 32 - ((frame / 2) % (tw + 40)) : 32;
+        it.print(sx, 20, id(jb_tiny), main_c, (tw > 56) ? display::TextAlign::TOP_LEFT : display::TextAlign::TOP_CENTER, cond.c_str());
+        it.line(8, 18, 56, 18, Color(30*br, 30*br, 30*br));
+      }
+      else if (preset == "Pong Game") {
+        static float bx=32, by=16, bdx=0.8, bdy=0.6;
+        static float lp=16, rp=16;
+        static uint8_t trail[3][2];
+        static uint8_t trail_idx=0;
+        static uint8_t l_score=0, r_score=0;
+        static bool scored=false;
+        
+        float ball_speed = speed * 0.15;
+        bx += bdx * ball_speed;
+        by += bdy * ball_speed;
+        
+        trail[trail_idx][0] = (uint8_t)bx;
+        trail[trail_idx][1] = (uint8_t)by;
+        trail_idx = (trail_idx + 1) % 3;
+        
+        if (bdx < 0) {
+          float target_left = by;
+          lp += (target_left - lp) * 0.12;
+        }
+        
+        if (bdx > 0) {
+          float target_right = by;
+          rp += (target_right - rp) * 0.12;
+        }
+        
+        if (lp < 4) lp = 4;
+        if (lp > 28) lp = 28;
+        if (rp < 4) rp = 4;
+        if (rp > 28) rp = 28;
+        
+        if (by < 2) {
+          by = 2;
+          bdy *= -1;
+          bdy += (rand() % 20 - 10) * 0.01;
+        }
+        if (by > 30) {
+          by = 30;
+          bdy *= -1;
+          bdy += (rand() % 20 - 10) * 0.01;
+        }
+        
+        if (bx <= 4 && bx >= 1 && by+1 >= lp-4 && by <= lp+4 && bdx < 0) {
+          bx = 4;
+          bdx *= -1.05;
+          bdy += (by - lp) * 0.15;
+        }
+        
+        if (bx >= 58 && bx <= 61 && by+1 >= rp-4 && by <= rp+4 && bdx > 0) {
+          bx = 58;
+          bdx *= -1.05;
+          bdy += (by - rp) * 0.15;
+        }
+        
+        if (bx < -2) {
+          r_score++;
+          scored = true;
+        }
+        if (bx > 64) {
+          l_score++;
+          scored = true;
+        }
+        
+        if (scored) {
+          bx = 32;
+          by = 16;
+          bdx = (r_score > l_score) ? -0.8 : 0.8;
+          bdy = (rand() % 100 - 50) * 0.01;
+          scored = false;
+          
+          if (l_score >= 10 || r_score >= 10) {
+            l_score = 0;
+            r_score = 0;
+          }
+        }
+        
+        if (std::abs(bdx) > 2.0) bdx = (bdx > 0) ? 2.0 : -2.0;
+        if (std::abs(bdy) > 1.5) bdy = (bdy > 0) ? 1.5 : -1.5;
+        if (std::abs(bdy) < 0.2) bdy = (bdy > 0) ? 0.2 : -0.2;
+        
+        for(int y=0; y<32; y+=3) {
+          it.draw_pixel_at(31, y, main_c);
+        }
+        
+        it.filled_rectangle(2, (int)lp-4, 2, 8, main_c);
+        it.filled_rectangle(60, (int)rp-4, 2, 8, main_c);
+        
+        for(int i=0; i<3; i++) {
+          uint8_t age = (trail_idx - i + 3) % 3;
+          if (age > 0) {
+            it.draw_pixel_at(trail[i][0], trail[i][1], main_c);
+          }
+        }
+        
+        it.filled_rectangle((int)bx, (int)by, 2, 2, white_c);
+        
+        char score_buf[4];
+        snprintf(score_buf, sizeof(score_buf), "%d", l_score);
+        it.print(16, 2, id(jb_tiny), main_c, display::TextAlign::TOP_CENTER, score_buf);
+        
+        snprintf(score_buf, sizeof(score_buf), "%d", r_score);
+        it.print(48, 2, id(jb_tiny), main_c, display::TextAlign::TOP_CENTER, score_buf);
+      }
+      else if (preset == "DVD Logo") {
+        static float dx=10, dy=10, ddx=0.5, ddy=0.5;
+        static uint8_t color_idx=0;
+        static Color logo_color = main_c;
+        
+        static Color colors[] = {
+          Color(uint8_t(255*br), 0, 0),
+          Color(0, uint8_t(255*br), 0),
+          Color(0, 0, uint8_t(255*br)),
+          Color(uint8_t(255*br), uint8_t(255*br), 0),
+          Color(uint8_t(255*br), 0, uint8_t(255*br)),
+          Color(0, uint8_t(255*br), uint8_t(255*br)),
+          Color(uint8_t(255*br), uint8_t(128*br), 0),
+          Color(uint8_t(128*br), 0, uint8_t(255*br))
+        };
+        
+        dx += ddx*(speed*0.2); 
+        dy += ddy*(speed*0.2);
+        
+        if (dx < 0) {
+          dx = 0;
+          ddx *= -1;
+          color_idx = (color_idx + 1) % 8;
+          logo_color = colors[color_idx];
+        }
+        if (dx > 49) {
+          dx = 49;
+          ddx *= -1;
+          color_idx = (color_idx + 1) % 8;
+          logo_color = colors[color_idx];
+        }
+        if (dy < 0) {
+          dy = 0;
+          ddy *= -1;
+          color_idx = (color_idx + 1) % 8;
+          logo_color = colors[color_idx];
+        }
+        if (dy > 23) {
+          dy = 23;
+          ddy *= -1;
+          color_idx = (color_idx + 1) % 8;
+          logo_color = colors[color_idx];
+        }
+        
+        it.rectangle((int)dx-1, (int)dy-1, 16, 10, Color(uint8_t(50*br), uint8_t(50*br), uint8_t(50*br)));
+        it.filled_rectangle((int)dx, (int)dy, 14, 8, logo_color);
+        it.draw_pixel_at((int)dx, (int)dy+7, Color(uint8_t(30*br), uint8_t(30*br), uint8_t(30*br)));
+        it.draw_pixel_at((int)dx+13, (int)dy, Color(uint8_t(200*br), uint8_t(200*br), uint8_t(200*br)));
+        it.print((int)dx+1, (int)dy+1, id(jb_tiny), Color(0, 0, 0), "DVD");
+      }
+      else if (preset == "Custom Text") {
+        static float ctx = 64;
+        std::string t = id(custom_text).state;
+        it.print(ctx, 12, id(jb_medium), main_c, t.c_str());
+        ctx -= speed * 0.15;
+        if (ctx < (int)t.length() * -5) ctx = 64;
+      }
+      else if (preset == "Fire") {
+        // Cozy campfire effect
+        static uint8_t ht[64][32];
+        
+        // Only generate heat in the center (campfire base, ~x 18-46)
+        for(int x=0; x<64; x++) {
+          if (x >= 18 && x <= 46) {
+            // Stronger in center, weaker at edges
+            int center_dist = abs(x - 32);
+            int chance = (center_dist < 6) ? 40 : (center_dist < 10) ? 20 : 8;
+            if (rand() % 100 < chance) {
+              int heat_val = (center_dist < 6) ? 200 + (rand() % 55) : 140 + (rand() % 60);
+              ht[x][31] = heat_val;
+            } else {
+              ht[x][31] = max(0, ht[x][31] - (rand() % 40));
+            }
+          } else {
+            ht[x][31] = 0;
+          }
+        }
+        
+        // Propagate heat upward with more decay (shorter flames)
+        for(int y=0; y<31; y++) {
+          for(int x=0; x<64; x++) {
+            int heat = ht[x][y+1];
+            int left = ht[(x-1+64)%64][y+1];
+            int right = ht[(x+1)%64][y+1];
+            
+            // More decay = shorter, cozier flames
+            int decay = (y > 20) ? (rand() % 10 + 8) : (rand() % 18 + 14);
+            ht[x][y] = max(0, ((heat + left + right) / 3) - decay);
+            
+            if (ht[x][y] < 10) ht[x][y] = 0;
+          }
+        }
+        
+        // Draw logs at the bottom (brown/dark red)
+        Color log_dark = Color(uint8_t(40*br), uint8_t(15*br), 0);
+        Color log_light = Color(uint8_t(70*br), uint8_t(30*br), uint8_t(5*br));
+        // Left log (angled)
+        for(int i=0; i<12; i++) {
+          it.draw_pixel_at(20+i, 29 - i/4, log_dark);
+          it.draw_pixel_at(20+i, 30 - i/4, log_light);
+        }
+        // Right log (angled other way)
+        for(int i=0; i<12; i++) {
+          it.draw_pixel_at(44-i, 29 - i/4, log_dark);
+          it.draw_pixel_at(44-i, 30 - i/4, log_light);
+        }
+        // Cross log
+        it.line(24, 31, 40, 31, log_light);
+        it.line(24, 30, 40, 30, log_dark);
+        
+        // Draw flames
+        for(int x=0; x<64; x++) {
+          for(int y=0; y<32; y++) {
+            uint8_t temp = ht[x][y];
+            if (temp > 180) {
+              // Hot core - bright yellow/white
+              it.draw_pixel_at(x, y, Color(uint8_t(255*br), uint8_t(220*br), uint8_t(100*br)));
+            } else if (temp > 130) {
+              // Warm - orange/yellow
+              it.draw_pixel_at(x, y, Color(uint8_t(255*br), uint8_t(150*br), 0));
+            } else if (temp > 80) {
+              // Medium - orange
+              it.draw_pixel_at(x, y, Color(uint8_t(220*br), uint8_t(70*br), 0));
+            } else if (temp > 40) {
+              // Cool edge - dark red
+              it.draw_pixel_at(x, y, Color(uint8_t(140*br), uint8_t(20*br), 0));
+            } else if (temp > 15) {
+              // Faint glow
+              it.draw_pixel_at(x, y, Color(uint8_t(60*br), uint8_t(5*br), 0));
+            }
+          }
+        }
+        
+        // Random embers/sparks floating up
+        if (frame % 3 == 0) {
+          static int ember_x[4] = {28, 32, 35, 30};
+          static int ember_y[4] = {20, 18, 22, 16};
+          for (int i = 0; i < 4; i++) {
+            ember_y[i] -= 1;
+            ember_x[i] += (rand() % 3) - 1;
+            if (ember_y[i] < 2 || ember_x[i] < 16 || ember_x[i] > 48) {
+              ember_x[i] = 26 + (rand() % 12);
+              ember_y[i] = 22 + (rand() % 6);
+            }
+            uint8_t ember_br = 120 + (rand() % 135);
+            it.draw_pixel_at(ember_x[i], ember_y[i], Color(uint8_t(ember_br*br), uint8_t(ember_br*0.4*br), 0));
+          }
+        }
+      }
+      else if (preset == "Plane Tracker") {
+        // Enable plane tracking when this preset is selected
+        if (!id(plane_tracking).state) {
+          id(plane_tracking).turn_on();
+        }
+        
+        if (id(plane_detected) && id(plane_callsign).length() > 0) {
+          id(last_plane_check) = millis();
+          
+          float display_heading = 90.0;
+          float relative_angle = id(plane_heading) - display_heading;
+          while (relative_angle > 180) relative_angle -= 360;
+          while (relative_angle < -180) relative_angle += 360;
+          
+          int arrow_x = 32 + (int)(relative_angle / 180.0 * 22.0);
+          arrow_x = std::min(std::max(arrow_x, 10), 54);
+          
+          Color arrow_c = Color(uint8_t(255*br), uint8_t(200*br), 0);
+          it.filled_rectangle(arrow_x-1, 0, 3, 2, arrow_c);
+          it.draw_pixel_at(arrow_x, 2, arrow_c);
+          
+          std::string callsign = id(plane_callsign);
+          it.print(32, 10, id(jb_huge), main_c, display::TextAlign::TOP_CENTER, callsign.c_str());
+          
+          char heading_text[16];
+          snprintf(heading_text, sizeof(heading_text), "%.0f", id(plane_heading));
+          it.print(32, 22, id(jb_small), white_c, display::TextAlign::TOP_CENTER, heading_text);
+        } else {
+          // Scanning animation
+          it.print(32, 4, id(jb_medium), main_c, display::TextAlign::TOP_CENTER, "SCANNING");
+          
+          // Animated radar sweep dot
+          int dot_x = 10 + ((frame / 2) % 44);
+          it.draw_pixel_at(dot_x, 16, main_c);
+          it.draw_pixel_at(dot_x - 1, 16, dim_c);
+          it.draw_pixel_at(dot_x - 2, 16, dim_c);
+          
+          char radius_text[16];
+          snprintf(radius_text, sizeof(radius_text), "%.0fkm", id(plane_radius).state);
+          it.print(32, 20, id(jb_tiny), dim_c, display::TextAlign::TOP_CENTER, radius_text);
+        }
+      }
+      else if (preset == "Designer") {
+        if (md_has_design) {
+          for (int y = 0; y < 32; y++) {
+            for (int x = 0; x < 64; x++) {
+              int i = (y * 64 + x) * 3;
+              uint8_t r = md_framebuffer[i], g = md_framebuffer[i+1], b = md_framebuffer[i+2];
+              if (r || g || b)
+                it.draw_pixel_at(x, y, Color(uint8_t(r*br), uint8_t(g*br), uint8_t(b*br)));
+            }
+          }
+        } else {
+          it.print(32, 11, id(jb_small), main_c, display::TextAlign::TOP_CENTER, "DESIGN ME");
+          it.print(32, 21, id(jb_tiny), dim_c, display::TextAlign::TOP_CENTER, ":8080");
+        }
+      }

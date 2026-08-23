@@ -1,0 +1,43 @@
+# Runtime data (generated screens/settings, not source)
+data/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Env
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
+
+# --- Not part of this project ---
+# This repo's root is $HOME, so these unrelated system/session
+# files would otherwise show up as untracked too.
+.bash_logout
+.bashrc
+.profile
+.cache/
+.claude/
+.claude.json
+.config/
+.copilot/
+.cursor-server/
+.init_done
+.local/
+.npm/
+.pki/
+.vscode-insiders-server/
+.vscode-server/
+.vscodium-server/
+.windsurf-server/
