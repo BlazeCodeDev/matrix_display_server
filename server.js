@@ -7,6 +7,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'data', 'screens.json');
 const SETTINGS_FILE = path.join(__dirname, 'data', 'settings.json');
+const YAML_FILE = path.join(__dirname, 'matrixdisplay.yaml');
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
@@ -37,11 +38,35 @@ function loadSettings() {
   } catch (e) {
     console.error('Error loading settings:', e);
   }
-  return { deviceUrl: '', lastPush: null };
+  return { deviceUrl: '', lastPush: null, cycle: { enabled: false, intervalSeconds: 30 } };
 }
 
 function saveSettings(settings) {
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+}
+
+// Auto-cycle: periodically advance the active screen and push it to the device.
+let cycleTimer = null;
+
+function cycleToNextScreen() {
+  const data = loadData();
+  if (data.screens.length < 2) return;
+  const index = data.screens.findIndex(s => s.id === data.activeScreenId);
+  const next = data.screens[(index + 1) % data.screens.length];
+  data.activeScreenId = next.id;
+  saveData(data);
+  pushActiveScreenToDevice();
+}
+
+function restartCycleTimer() {
+  if (cycleTimer) clearInterval(cycleTimer);
+  cycleTimer = null;
+  const settings = loadSettings();
+  const cycle = settings.cycle || {};
+  if (cycle.enabled) {
+    const ms = Math.max(5, cycle.intervalSeconds || 30) * 1000;
+    cycleTimer = setInterval(cycleToNextScreen, ms);
+  }
 }
 
 // Build the same pixel payload shape as GET /api/esp/pixels for a given screen
@@ -211,7 +236,14 @@ app.get('/api/settings', (req, res) => {
 app.put('/api/settings', (req, res) => {
   const settings = loadSettings();
   settings.deviceUrl = (req.body.deviceUrl || '').trim();
+  if (req.body.cycle) {
+    settings.cycle = {
+      enabled: !!req.body.cycle.enabled,
+      intervalSeconds: Math.max(5, parseInt(req.body.cycle.intervalSeconds) || 30)
+    };
+  }
   saveSettings(settings);
+  restartCycleTimer();
   res.json(settings);
 });
 
@@ -223,6 +255,15 @@ app.post('/api/push', async (req, res) => {
   }
   const push = await pushActiveScreenToDevice();
   res.json({ push });
+});
+
+// Serve the ESPHome yaml so the web UI can always show the current config
+app.get('/api/esphome-yaml', (req, res) => {
+  try {
+    res.type('text/plain').send(fs.readFileSync(YAML_FILE, 'utf8'));
+  } catch (e) {
+    res.status(404).json({ error: 'matrixdisplay.yaml not found' });
+  }
 });
 
 // ============ ESP32 API Endpoints ============
@@ -557,4 +598,5 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`  GET  /api/esp/status  - Server status`);
   console.log(`  GET  /api/esp/screens - List screens`);
   console.log(`  POST /api/esp/active/:id - Set active screen`);
+  restartCycleTimer();
 });

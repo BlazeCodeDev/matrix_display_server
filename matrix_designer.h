@@ -12,6 +12,44 @@
 uint8_t md_framebuffer[MD_WIDTH * MD_HEIGHT * 3] = {0};
 volatile bool md_has_design = false;
 
+// Values exposed from Home Assistant via the `set_metric` API service, e.g. cpu load.
+// Rendered as a small status line at the bottom of the display.
+#define MD_MAX_METRICS 4
+struct MdMetric { std::string label; float value; bool active; };
+MdMetric md_metrics[MD_MAX_METRICS];
+
+void md_set_metric(const char *key, float value) {
+  for (int i = 0; i < MD_MAX_METRICS; i++) {
+    if (md_metrics[i].active && md_metrics[i].label == key) {
+      md_metrics[i].value = value;
+      return;
+    }
+  }
+  for (int i = 0; i < MD_MAX_METRICS; i++) {
+    if (!md_metrics[i].active) {
+      md_metrics[i] = { key, value, true };
+      return;
+    }
+  }
+  md_metrics[0] = { key, value, true };
+}
+
+std::string md_metrics_line() {
+  std::string out;
+  char buf[24];
+  for (int i = 0; i < MD_MAX_METRICS; i++) {
+    if (!md_metrics[i].active) continue;
+    if (!out.empty()) out += " ";
+    if (md_metrics[i].value == (int) md_metrics[i].value) {
+      snprintf(buf, sizeof(buf), "%s:%d", md_metrics[i].label.c_str(), (int) md_metrics[i].value);
+    } else {
+      snprintf(buf, sizeof(buf), "%s:%.1f", md_metrics[i].label.c_str(), md_metrics[i].value);
+    }
+    out += buf;
+  }
+  return out;
+}
+
 namespace {
 
 httpd_handle_t md_server = nullptr;

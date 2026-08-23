@@ -359,6 +359,11 @@ const App = () => {
   const [deviceUrlInput, setDeviceUrlInput] = useState('');
   const [lastPush, setLastPush] = useState(null);
   const [settingsStatus, setSettingsStatus] = useState('');
+  const [cycleEnabled, setCycleEnabled] = useState(false);
+  const [cycleInterval, setCycleInterval] = useState(30);
+  const [showYaml, setShowYaml] = useState(false);
+  const [yamlContent, setYamlContent] = useState('');
+  const [yamlLoading, setYamlLoading] = useState(false);
   const canvasRef = useRef(null);
   const framesRef = useRef(frames);
   framesRef.current = frames;
@@ -385,6 +390,8 @@ const App = () => {
       setDeviceUrl(settings.deviceUrl || '');
       setDeviceUrlInput(settings.deviceUrl || '');
       setLastPush(settings.lastPush || null);
+      setCycleEnabled(!!settings.cycle?.enabled);
+      setCycleInterval(settings.cycle?.intervalSeconds || 30);
     } catch (e) {
       console.error('Failed to fetch settings:', e);
     }
@@ -396,16 +403,38 @@ const App = () => {
       const res = await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ deviceUrl: deviceUrlInput })
+        body: JSON.stringify({
+          deviceUrl: deviceUrlInput,
+          cycle: { enabled: cycleEnabled, intervalSeconds: cycleInterval }
+        })
       });
       const settings = await res.json();
       setDeviceUrl(settings.deviceUrl || '');
+      setCycleEnabled(!!settings.cycle?.enabled);
+      setCycleInterval(settings.cycle?.intervalSeconds || 30);
       setSettingsStatus('Saved');
       setTimeout(() => setSettingsStatus(''), 1500);
     } catch (e) {
       console.error('Failed to save settings:', e);
       setSettingsStatus('Failed to save');
     }
+  };
+
+  const fetchYaml = async () => {
+    setShowYaml(true);
+    setYamlLoading(true);
+    try {
+      const res = await fetch('/api/esphome-yaml');
+      setYamlContent(await res.text());
+    } catch (e) {
+      setYamlContent('Failed to load matrixdisplay.yaml');
+    } finally {
+      setYamlLoading(false);
+    }
+  };
+
+  const copyYaml = () => {
+    navigator.clipboard?.writeText(yamlContent);
   };
 
   const pushNow = async () => {
@@ -824,6 +853,9 @@ const App = () => {
           {saveStatus && <span style={{ fontSize: 12, color: 'var(--md-on-success-container)' }}>{saveStatus}</span>}
           <button className="m3-btn m3-btn-success" onClick={saveScreen}><Icon name="save" size={18} /> Save</button>
           <button className="m3-fab" onClick={() => setShowNewDialog(true)}><Icon name="add" size={20} /> New</button>
+          <button className="m3-icon-btn" onClick={fetchYaml} title="View ESPHome YAML">
+            <Icon name="code" />
+          </button>
           <button
             className="m3-icon-btn"
             onClick={() => { setDeviceUrlInput(deviceUrl); setShowSettings(true); }}
@@ -1035,6 +1067,24 @@ const App = () => {
               style={{ width: '100%', marginBottom: 16 }}
               autoFocus
             />
+
+            <hr className="m3-divider" />
+
+            <label className="m3-field-label">Auto Cycle Screens</label>
+            <p style={{ margin: '0 0 10px', fontSize: 12, color: 'var(--md-on-surface-variant)', lineHeight: 1.5 }}>
+              Automatically rotate the active screen and push each one to the display.
+            </p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+              <div className={`m3-switch${cycleEnabled ? ' on' : ''}`} onClick={() => setCycleEnabled(!cycleEnabled)} role="switch" aria-checked={cycleEnabled}>
+                <div className="thumb" />
+              </div>
+              <span style={{ fontSize: 12, color: 'var(--md-on-surface-variant)' }}>Enabled</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
+                <input type="number" min="5" value={cycleInterval} onChange={(e) => setCycleInterval(Math.max(5, parseInt(e.target.value) || 30))} className="m3-input" style={{ width: 70, height: 32 }} />
+                <span style={{ fontSize: 11, color: 'var(--md-on-surface-variant)' }}>seconds</span>
+              </div>
+            </div>
+
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
               <button className="m3-btn m3-btn-success" style={{ flex: 1 }} onClick={saveSettings}>Save</button>
               <button className="m3-btn m3-btn-outlined" style={{ flex: 1 }} onClick={pushNow} disabled={!deviceUrl}>Push Now</button>
@@ -1052,6 +1102,28 @@ const App = () => {
             <div style={{ marginTop: 16, textAlign: 'right' }}>
               <button className="m3-btn m3-btn-outlined" onClick={() => setShowSettings(false)}>Close</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ESPHome YAML Dialog */}
+      {showYaml && (
+        <div className="m3-scrim" onClick={() => setShowYaml(false)}>
+          <div className="m3-dialog" style={{ width: 'min(720px, 90vw)', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <h3 style={{ margin: 0, fontSize: 18, fontWeight: 500 }}>matrixdisplay.yaml</h3>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="m3-btn m3-btn-outlined m3-btn-sm" onClick={copyYaml}><Icon name="content_copy" size={14} /> Copy</button>
+                <button className="m3-icon-btn m3-icon-btn-sm" onClick={() => setShowYaml(false)}><Icon name="close" size={18} /></button>
+              </div>
+            </div>
+            <pre style={{
+              flex: 1, overflow: 'auto', margin: 0, padding: 12, background: 'var(--md-surface-container-lowest)',
+              borderRadius: 'var(--md-shape-sm)', fontFamily: "'Roboto Mono', monospace", fontSize: 11, lineHeight: 1.6,
+              color: 'var(--md-on-surface)', whiteSpace: 'pre',
+            }}>
+              {yamlLoading ? 'Loading…' : yamlContent}
+            </pre>
           </div>
         </div>
       )}
