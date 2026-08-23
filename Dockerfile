@@ -11,6 +11,7 @@ RUN npm install --production
 # Copy application files
 COPY server.js ./
 COPY public ./public/
+COPY matrixdisplay.yaml ./
 
 # Create data directory
 RUN mkdir -p data
