@@ -364,6 +364,7 @@ const App = () => {
   const [showYaml, setShowYaml] = useState(false);
   const [yamlContent, setYamlContent] = useState('');
   const [yamlLoading, setYamlLoading] = useState(false);
+  const [yamlCopyStatus, setYamlCopyStatus] = useState('');
   const canvasRef = useRef(null);
   const framesRef = useRef(frames);
   framesRef.current = frames;
@@ -433,8 +434,31 @@ const App = () => {
     }
   };
 
-  const copyYaml = () => {
-    navigator.clipboard?.writeText(yamlContent);
+  const copyYaml = async () => {
+    // navigator.clipboard requires a secure context (HTTPS or localhost) and is
+    // undefined otherwise, so fall back to the legacy execCommand approach for
+    // plain-HTTP LAN deployments.
+    try {
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(yamlContent);
+        setYamlCopyStatus('Copied!');
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = yamlContent;
+        textarea.readOnly = true;
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        setYamlCopyStatus(ok ? 'Copied!' : 'Copy failed — select and copy manually');
+      }
+    } catch (e) {
+      setYamlCopyStatus('Copy failed — select and copy manually');
+    }
+    setTimeout(() => setYamlCopyStatus(''), 2000);
   };
 
   const pushNow = async () => {
@@ -1112,7 +1136,8 @@ const App = () => {
           <div className="m3-dialog" style={{ width: 'min(720px, 90vw)', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
               <h3 style={{ margin: 0, fontSize: 18, fontWeight: 500 }}>matrixdisplay.yaml</h3>
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                {yamlCopyStatus && <span style={{ fontSize: 11, color: 'var(--md-on-surface-variant)' }}>{yamlCopyStatus}</span>}
                 <button className="m3-btn m3-btn-outlined m3-btn-sm" onClick={copyYaml}><Icon name="content_copy" size={14} /> Copy</button>
                 <button className="m3-icon-btn m3-icon-btn-sm" onClick={() => setShowYaml(false)}><Icon name="close" size={18} /></button>
               </div>
