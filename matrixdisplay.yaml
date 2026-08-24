@@ -1,12 +1,6 @@
 esphome:
   name: matrix-display
   friendly_name: Matrix Display
-  includes:
-    - matrix_designer.h          # <-- the companion file, same folder
-  on_boot:
-    priority: -100
-    then:
-      - lambda: 'matrix_designer_init();'
 
 external_components:
   - source: github://TillFleisch/ESPHome-HUB75-MatrixDisplayWrapper@main
@@ -38,17 +32,43 @@ api:
         value: float
       then:
         - lambda: |-
-            md_set_metric(key.c_str(), value);
+            for (size_t i = 0; i < id(ha_metric_labels).size(); i++) {
+              if (id(ha_metric_labels)[i] == key) {
+                id(ha_metric_values)[i] = value;
+                return;
+              }
+            }
+            if (id(ha_metric_labels).size() < 4) {
+              id(ha_metric_labels).push_back(key);
+              id(ha_metric_values).push_back(value);
+            } else {
+              id(ha_metric_labels)[0] = key;
+              id(ha_metric_values)[0] = value;
+            }
 
 wifi:
   ssid: "404 Network unavailable"
   password: "85498036873100493624"
+
+http_request:
+  id: http_request_id
+  useragent: esphome/matrix-display
+  timeout: 10s
 
 text_sensor:
   - platform: wifi_info
     ip_address:
       name: "IP Address"
       id: device_ip
+
+text:
+  - platform: template
+    name: "Matrix Server URL"
+    id: server_url
+    mode: text
+    optimistic: true
+    initial_value: "http://192.168.1.100:3000"
+    restore_value: true
 
 sensor:
   - platform: adc
@@ -132,6 +152,17 @@ globals:
   - id: last_ldr_check
     type: unsigned long
     initial_value: '0'
+  # 64x32 RGB framebuffer polled from matrix_display_server, one byte per channel.
+  - id: md_framebuffer
+    type: uint8_t[6144]
+  - id: md_has_design
+    type: bool
+    initial_value: 'false'
+  # Values exposed from Home Assistant via the `set_metric` API service above.
+  - id: ha_metric_labels
+    type: std::vector<std::string>
+  - id: ha_metric_values
+    type: std::vector<float>
 
 interval:
   # Auto brightness based on LDR - only adjusts brightness, never controls power
@@ -190,6 +221,91 @@ interval:
             call.perform();
           }
 
+  # Poll matrix_display_server for the active screen's pixel data.
+  - interval: 3s
+    then:
+      - http_request.get:
+          url: !lambda |-
+            std::string base = id(server_url).state;
+            while (!base.empty() && base.back() == '/') base.pop_back();
+            return base + "/api/esp/pixels";
+          capture_response: true
+          max_response_buffer_size: 80000
+          on_response:
+            then:
+              - lambda: |-
+                  if ((int)response->status_code != 200) return;
+                  std::string resp_body = body;
+
+                  // Find "key":<int> starting at or after `from`.
+                  auto extract_int = [](const std::string &s, size_t from, const char *key, int &out) -> bool {
+                    std::string needle = std::string("\"") + key + "\":";
+                    size_t p = s.find(needle, from);
+                    if (p == std::string::npos) return false;
+                    p += needle.length();
+                    while (p < s.length() && s[p] == ' ') p++;
+                    bool neg = false;
+                    if (p < s.length() && s[p] == '-') { neg = true; p++; }
+                    int val = 0;
+                    bool any = false;
+                    while (p < s.length() && isdigit((unsigned char) s[p])) {
+                      val = val * 10 + (s[p] - '0');
+                      p++;
+                      any = true;
+                    }
+                    if (!any) return false;
+                    out = neg ? -val : val;
+                    return true;
+                  };
+
+                  size_t frames_pos = resp_body.find("\"frames\":");
+                  if (frames_pos == std::string::npos) return;
+
+                  size_t outer_start = resp_body.find('[', frames_pos);
+                  if (outer_start == std::string::npos) return;
+                  size_t frame_start = resp_body.find('[', outer_start + 1);
+                  if (frame_start == std::string::npos) return;
+
+                  // Find the matching close bracket for the first frame's pixel array.
+                  int depth = 0;
+                  size_t frame_end = std::string::npos;
+                  for (size_t i = frame_start; i < resp_body.length(); i++) {
+                    if (resp_body[i] == '[') depth++;
+                    else if (resp_body[i] == ']') {
+                      depth--;
+                      if (depth == 0) { frame_end = i; break; }
+                    }
+                  }
+                  if (frame_end == std::string::npos) return;
+
+                  for (int i = 0; i < 6144; i++) id(md_framebuffer)[i] = 0;
+
+                  size_t pos = frame_start;
+                  while (true) {
+                    size_t obj_start = resp_body.find('{', pos);
+                    if (obj_start == std::string::npos || obj_start > frame_end) break;
+                    size_t obj_end = resp_body.find('}', obj_start);
+                    if (obj_end == std::string::npos || obj_end > frame_end) break;
+
+                    int x = -1, y = -1, r = 0, g = 0, b = 0;
+                    extract_int(resp_body, obj_start, "x", x);
+                    extract_int(resp_body, obj_start, "y", y);
+                    extract_int(resp_body, obj_start, "r", r);
+                    extract_int(resp_body, obj_start, "g", g);
+                    extract_int(resp_body, obj_start, "b", b);
+
+                    if (x >= 0 && x < 64 && y >= 0 && y < 32) {
+                      int i = (y * 64 + x) * 3;
+                      id(md_framebuffer)[i] = (uint8_t) r;
+                      id(md_framebuffer)[i + 1] = (uint8_t) g;
+                      id(md_framebuffer)[i + 2] = (uint8_t) b;
+                    }
+
+                    pos = obj_end + 1;
+                  }
+
+                  id(md_has_design) = true;
+
 font:
   - file:
       url: "https://github.com/trip5/Matrix-Fonts/raw/main/6-series/MatrixLight6.ttf"
@@ -235,22 +351,33 @@ display:
       Color white_c = Color(uint8_t(255*br), uint8_t(255*br), uint8_t(255*br));
       Color dim_c = Color(uint8_t(40*br), uint8_t(40*br), uint8_t(40*br));
 
-      if (md_has_design) {
+      if (id(md_has_design)) {
         for (int y = 0; y < 32; y++) {
           for (int x = 0; x < 64; x++) {
             int i = (y * 64 + x) * 3;
-            uint8_t r = md_framebuffer[i], g = md_framebuffer[i+1], b = md_framebuffer[i+2];
+            uint8_t r = id(md_framebuffer)[i], g = id(md_framebuffer)[i+1], b = id(md_framebuffer)[i+2];
             if (r || g || b)
               it.draw_pixel_at(x, y, Color(uint8_t(r*br), uint8_t(g*br), uint8_t(b*br)));
           }
         }
       } else {
         it.print(32, 4, id(jb_small), main_c, display::TextAlign::TOP_CENTER, "DESIGN ME");
-        std::string url = "http://" + id(device_ip).state + ":8080";
+        std::string url = id(server_url).state;
         it.print(32, 15, id(jb_tiny), dim_c, display::TextAlign::TOP_CENTER, url.c_str());
       }
 
-      std::string metrics = md_metrics_line();
-      if (!metrics.empty()) {
+      if (!id(ha_metric_labels).empty()) {
+        std::string metrics;
+        for (size_t i = 0; i < id(ha_metric_labels).size(); i++) {
+          char buf[24];
+          float v = id(ha_metric_values)[i];
+          if (v == (int) v) {
+            snprintf(buf, sizeof(buf), "%s:%d", id(ha_metric_labels)[i].c_str(), (int) v);
+          } else {
+            snprintf(buf, sizeof(buf), "%s:%.1f", id(ha_metric_labels)[i].c_str(), v);
+          }
+          if (!metrics.empty()) metrics += " ";
+          metrics += buf;
+        }
         it.print(1, 25, id(jb_tiny), white_c, display::TextAlign::TOP_LEFT, metrics.c_str());
       }

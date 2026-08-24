@@ -29,7 +29,7 @@ function saveData(data) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
-// Settings (e.g. connected display URL) persistence
+// Settings (currently just the auto-cycle config) persistence
 function loadSettings() {
   try {
     if (fs.existsSync(SETTINGS_FILE)) {
@@ -38,14 +38,15 @@ function loadSettings() {
   } catch (e) {
     console.error('Error loading settings:', e);
   }
-  return { deviceUrl: '', lastPush: null, cycle: { enabled: false, intervalSeconds: 30 } };
+  return { cycle: { enabled: false, intervalSeconds: 30 } };
 }
 
 function saveSettings(settings) {
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
 }
 
-// Auto-cycle: periodically advance the active screen and push it to the device.
+// Auto-cycle: periodically advance the active screen. The ESP32 polls
+// /api/esp/pixels on its own schedule, so there is nothing to push here.
 let cycleTimer = null;
 
 function cycleToNextScreen() {
@@ -55,7 +56,6 @@ function cycleToNextScreen() {
   const next = data.screens[(index + 1) % data.screens.length];
   data.activeScreenId = next.id;
   saveData(data);
-  pushActiveScreenToDevice();
 }
 
 function restartCycleTimer() {
@@ -67,59 +67,6 @@ function restartCycleTimer() {
     const ms = Math.max(5, cycle.intervalSeconds || 30) * 1000;
     cycleTimer = setInterval(cycleToNextScreen, ms);
   }
-}
-
-// Build the same pixel payload shape as GET /api/esp/pixels for a given screen
-function buildPixelPayload(screen) {
-  const frames = screen.frames.map(frameElements => {
-    const allPixels = [];
-    frameElements.forEach(el => {
-      allPixels.push(...getElementPixels(el));
-    });
-    return allPixels;
-  });
-  return {
-    id: screen.id,
-    name: screen.name,
-    isAnimated: screen.isAnimated,
-    frameDelay: screen.frameDelay,
-    frameCount: frames.length,
-    frames: frames
-  };
-}
-
-// Push the active screen's pixel data to the configured display, if any.
-// Best-effort: failures are recorded but never block the caller.
-async function pushActiveScreenToDevice() {
-  const settings = loadSettings();
-  if (!settings.deviceUrl) return;
-
-  const data = loadData();
-  const screen = data.activeScreenId ? data.screens.find(s => s.id === data.activeScreenId) : null;
-  if (!screen) return;
-
-  const url = settings.deviceUrl.replace(/\/+$/, '') + '/api/pixels';
-  const result = { timestamp: Date.now(), url, success: false, error: null };
-
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildPixelPayload(screen)),
-      signal: controller.signal
-    });
-    clearTimeout(timeout);
-    result.success = res.ok;
-    if (!res.ok) result.error = `HTTP ${res.status}`;
-  } catch (e) {
-    result.error = e.name === 'AbortError' ? 'Timed out' : e.message;
-  }
-
-  settings.lastPush = result;
-  saveSettings(settings);
-  return result;
 }
 
 // API Routes
@@ -169,7 +116,7 @@ app.post('/api/screens', (req, res) => {
 });
 
 // Update screen
-app.put('/api/screens/:id', async (req, res) => {
+app.put('/api/screens/:id', (req, res) => {
   const data = loadData();
   const index = data.screens.findIndex(s => s.id === req.params.id);
   if (index === -1) {
@@ -184,11 +131,7 @@ app.put('/api/screens/:id', async (req, res) => {
     updatedAt: new Date().toISOString()
   };
   saveData(data);
-  let push;
-  if (data.activeScreenId === req.params.id) {
-    push = await pushActiveScreenToDevice();
-  }
-  res.json({ ...data.screens[index], push });
+  res.json(data.screens[index]);
 });
 
 // Delete screen
@@ -207,7 +150,7 @@ app.delete('/api/screens/:id', (req, res) => {
 });
 
 // Set active screen
-app.post('/api/active/:id', async (req, res) => {
+app.post('/api/active/:id', (req, res) => {
   const data = loadData();
   const screen = data.screens.find(s => s.id === req.params.id);
   if (!screen) {
@@ -215,8 +158,7 @@ app.post('/api/active/:id', async (req, res) => {
   }
   data.activeScreenId = req.params.id;
   saveData(data);
-  const push = await pushActiveScreenToDevice();
-  res.json({ activeScreenId: data.activeScreenId, push });
+  res.json({ activeScreenId: data.activeScreenId });
 });
 
 // Get active screen ID
@@ -225,17 +167,16 @@ app.get('/api/active', (req, res) => {
   res.json({ activeScreenId: data.activeScreenId });
 });
 
-// ============ Display Settings ============
+// ============ Settings ============
 
-// Get connected display settings (device URL + last push result)
+// Get settings (currently just the auto-cycle config)
 app.get('/api/settings', (req, res) => {
   res.json(loadSettings());
 });
 
-// Update connected display settings
+// Update settings
 app.put('/api/settings', (req, res) => {
   const settings = loadSettings();
-  settings.deviceUrl = (req.body.deviceUrl || '').trim();
   if (req.body.cycle) {
     settings.cycle = {
       enabled: !!req.body.cycle.enabled,
@@ -245,16 +186,6 @@ app.put('/api/settings', (req, res) => {
   saveSettings(settings);
   restartCycleTimer();
   res.json(settings);
-});
-
-// Manually push the active screen to the configured display now
-app.post('/api/push', async (req, res) => {
-  const settings = loadSettings();
-  if (!settings.deviceUrl) {
-    return res.status(400).json({ error: 'No display URL configured' });
-  }
-  const push = await pushActiveScreenToDevice();
-  res.json({ push });
 });
 
 // Serve the ESPHome yaml so the web UI can always show the current config
@@ -573,7 +504,7 @@ app.get('/api/esp/screens', (req, res) => {
 });
 
 // ESP32 can set active screen
-app.post('/api/esp/active/:id', async (req, res) => {
+app.post('/api/esp/active/:id', (req, res) => {
   const data = loadData();
   const screen = data.screens.find(s => s.id === req.params.id);
   if (!screen) {
@@ -581,8 +512,7 @@ app.post('/api/esp/active/:id', async (req, res) => {
   }
   data.activeScreenId = req.params.id;
   saveData(data);
-  const push = await pushActiveScreenToDevice();
-  res.json({ success: true, activeScreenId: data.activeScreenId, push });
+  res.json({ success: true, activeScreenId: data.activeScreenId });
 });
 
 // Serve index.html for SPA routing

@@ -355,9 +355,6 @@ const App = () => {
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [newScreenName, setNewScreenName] = useState('');
   const [showSettings, setShowSettings] = useState(false);
-  const [deviceUrl, setDeviceUrl] = useState('');
-  const [deviceUrlInput, setDeviceUrlInput] = useState('');
-  const [lastPush, setLastPush] = useState(null);
   const [settingsStatus, setSettingsStatus] = useState('');
   const [cycleEnabled, setCycleEnabled] = useState(false);
   const [cycleInterval, setCycleInterval] = useState(30);
@@ -388,9 +385,6 @@ const App = () => {
     try {
       const res = await fetch('/api/settings');
       const settings = await res.json();
-      setDeviceUrl(settings.deviceUrl || '');
-      setDeviceUrlInput(settings.deviceUrl || '');
-      setLastPush(settings.lastPush || null);
       setCycleEnabled(!!settings.cycle?.enabled);
       setCycleInterval(settings.cycle?.intervalSeconds || 30);
     } catch (e) {
@@ -405,12 +399,10 @@ const App = () => {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          deviceUrl: deviceUrlInput,
           cycle: { enabled: cycleEnabled, intervalSeconds: cycleInterval }
         })
       });
       const settings = await res.json();
-      setDeviceUrl(settings.deviceUrl || '');
       setCycleEnabled(!!settings.cycle?.enabled);
       setCycleInterval(settings.cycle?.intervalSeconds || 30);
       setSettingsStatus('Saved');
@@ -461,24 +453,6 @@ const App = () => {
     setTimeout(() => setYamlCopyStatus(''), 2000);
   };
 
-  const pushNow = async () => {
-    setSettingsStatus('Pushing...');
-    try {
-      const res = await fetch('/api/push', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) {
-        setSettingsStatus(data.error || 'Push failed');
-        return;
-      }
-      setLastPush(data.push);
-      setSettingsStatus(data.push?.success ? 'Pushed' : (data.push?.error || 'Push failed'));
-      setTimeout(() => setSettingsStatus(''), 2000);
-    } catch (e) {
-      console.error('Failed to push:', e);
-      setSettingsStatus('Push failed');
-    }
-  };
-
   const fetchScreens = async () => {
     try {
       const res = await fetch('/api/screens');
@@ -523,13 +497,11 @@ const App = () => {
     
     setSaveStatus('Saving...');
     try {
-      const res = await fetch(`/api/screens/${currentScreenId}`, {
+      await fetch(`/api/screens/${currentScreenId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: screenName, frames, isAnimated, frameDelay })
       });
-      const saved = await res.json();
-      if (saved.push) setLastPush(saved.push);
       setSaveStatus('Saved!');
       fetchScreens();
       setTimeout(() => setSaveStatus(''), 2000);
@@ -585,9 +557,7 @@ const App = () => {
 
   const setActive = async (id) => {
     try {
-      const res = await fetch(`/api/active/${id}`, { method: 'POST' });
-      const data = await res.json();
-      if (data.push) setLastPush(data.push);
+      await fetch(`/api/active/${id}`, { method: 'POST' });
       setActiveScreenId(id);
       fetchScreens();
     } catch (e) {
@@ -882,9 +852,9 @@ const App = () => {
           </button>
           <button
             className="m3-icon-btn"
-            onClick={() => { setDeviceUrlInput(deviceUrl); setShowSettings(true); }}
-            title="Display settings"
-            style={deviceUrl ? { color: 'var(--md-on-success-container)', background: 'var(--md-success-container)' } : undefined}
+            onClick={() => setShowSettings(true)}
+            title="Settings"
+            style={cycleEnabled ? { color: 'var(--md-on-success-container)', background: 'var(--md-success-container)' } : undefined}
           >
             <Icon name="settings" />
           </button>
@@ -1071,32 +1041,19 @@ const App = () => {
         </div>
       </div>
 
-      {/* Display Settings Dialog */}
+      {/* Settings Dialog */}
       {showSettings && (
         <div className="m3-scrim" onClick={() => setShowSettings(false)}>
           <div className="m3-dialog" style={{ width: 400 }} onClick={e => e.stopPropagation()}>
-            <h3 style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 500 }}>Connected Display</h3>
+            <h3 style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 500 }}>Settings</h3>
             <p style={{ margin: '0 0 16px', fontSize: 12, color: 'var(--md-on-surface-variant)', lineHeight: 1.5 }}>
-              The base URL of your ESP32's designer port (default 8080). The active screen is pushed to
-              <code style={{ margin: '0 4px', color: 'var(--md-primary)' }}>{'{url}/api/pixels'}</code>
-              whenever you Save or Set Active.
+              The ESP32 polls <code style={{ margin: '0 4px', color: 'var(--md-primary)' }}>/api/esp/pixels</code>
+              on its own schedule (configured as "Matrix Server URL" on the device in Home Assistant / ESPHome) — nothing to set up here for that.
             </p>
-            <label className="m3-field-label">Device URL</label>
-            <input
-              type="text"
-              value={deviceUrlInput}
-              onChange={(e) => setDeviceUrlInput(e.target.value)}
-              placeholder="http://192.168.1.50:8080"
-              className="m3-input"
-              style={{ width: '100%', marginBottom: 16 }}
-              autoFocus
-            />
-
-            <hr className="m3-divider" />
 
             <label className="m3-field-label">Auto Cycle Screens</label>
             <p style={{ margin: '0 0 10px', fontSize: 12, color: 'var(--md-on-surface-variant)', lineHeight: 1.5 }}>
-              Automatically rotate the active screen and push each one to the display.
+              Automatically rotate which screen is active. The display picks up the change on its next poll.
             </p>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
               <div className={`m3-switch${cycleEnabled ? ' on' : ''}`} onClick={() => setCycleEnabled(!cycleEnabled)} role="switch" aria-checked={cycleEnabled}>
@@ -1111,18 +1068,8 @@ const App = () => {
 
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
               <button className="m3-btn m3-btn-success" style={{ flex: 1 }} onClick={saveSettings}>Save</button>
-              <button className="m3-btn m3-btn-outlined" style={{ flex: 1 }} onClick={pushNow} disabled={!deviceUrl}>Push Now</button>
             </div>
             {settingsStatus && <div style={{ fontSize: 12, color: 'var(--md-on-surface-variant)', marginBottom: 8 }}>{settingsStatus}</div>}
-            {lastPush && (
-              <div style={{
-                padding: 10, borderRadius: 'var(--md-shape-sm)', fontSize: 11,
-                background: lastPush.success ? 'var(--md-success-container)' : 'var(--md-error-container)',
-                color: lastPush.success ? 'var(--md-on-success-container)' : 'var(--md-on-error-container)',
-              }}>
-                Last push: {lastPush.success ? 'OK' : `Failed (${lastPush.error})`} — {new Date(lastPush.timestamp).toLocaleTimeString()}
-              </div>
-            )}
             <div style={{ marginTop: 16, textAlign: 'right' }}>
               <button className="m3-btn m3-btn-outlined" onClick={() => setShowSettings(false)}>Close</button>
             </div>

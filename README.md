@@ -88,31 +88,27 @@ Set the active screen.
 
 ---
 
-## Connected Display (push mode)
+## Reference ESP32 Config (matrixdisplay.yaml)
 
-Instead of (or in addition to) polling, you can configure a display's address in the web UI
-(gear icon in the header) and the server will actively push the active screen to it whenever
-you click **Save** or **Set Active**.
+`matrixdisplay.yaml` in this repo is a complete, single-file ESPHome config for a 64x32
+HUB75 matrix (no companion `.h` file needed). It polls `GET /api/esp/pixels` every 3s and
+renders the active screen; when nothing has been designed yet it shows "DESIGN ME" and the
+configured server URL.
 
-- `GET /api/settings` / `PUT /api/settings` — read/write the configured `deviceUrl`.
-- `POST /api/push` — manually push the active screen right now.
-
-On push, the server sends:
-
-```
-POST {deviceUrl}/api/pixels
-Content-Type: application/json
-
-{ "id", "name", "isAnimated", "frameDelay", "frameCount", "frames": [[{x,y,r,g,b}, ...], ...] }
-```
-
-Only the first frame is used by the reference ESP32 receiver (`matrix_designer.h` /
-`matrixdisplay.yaml`), which listens on port 8080 and exposes:
-
-- `POST /api/pixels` — applies the pushed design to `md_framebuffer` and sets `md_has_design`.
-- `GET /api/status` — `{"hasDesign": true|false}`.
-
-Set the device URL in Settings to e.g. `http://<esp32-ip>:8080`.
+- **Matrix Server URL** — a text entity (settable from Home Assistant or the ESPHome device
+  page) pointing at this server, e.g. `http://192.168.1.100:3000`. Nothing to configure on
+  the web UI side for this — the device polls on its own schedule.
+- **Auto Cycle Screens** — in the web UI's Settings (gear icon), automatically rotate the
+  active screen on an interval; the display picks up the change on its next poll.
+- **View ESPHome YAML** — the `</>` button in the header always shows the current
+  `matrixdisplay.yaml` content (served from `GET /api/esphome-yaml`) with a copy button, so
+  you can paste it straight into ESPHome.
+- **Home Assistant metrics** — call `esphome.matrix_display_set_metric` from an HA automation
+  with a `key` (e.g. `"cpu"`) and `value` (float) to show arbitrary live values (CPU load,
+  temperature, etc.) as a small status line at the bottom of the display, regardless of what's
+  designed.
+- Auto brightness (LDR-based), Animation Speed, and a Display Power switch are also exposed
+  as Home Assistant entities.
 
 ---
 
