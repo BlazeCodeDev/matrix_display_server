@@ -362,8 +362,7 @@ display:
         }
       } else {
         it.print(32, 4, id(jb_small), main_c, display::TextAlign::TOP_CENTER, "DESIGN ME");
-        std::string url = id(server_url).state;
-        it.print(32, 15, id(jb_tiny), dim_c, display::TextAlign::TOP_CENTER, url.c_str());
+        it.print(32, 15, id(jb_tiny), dim_c, display::TextAlign::TOP_CENTER, id(device_ip).state.c_str());
       }
 
       if (!id(ha_metric_labels).empty()) {
