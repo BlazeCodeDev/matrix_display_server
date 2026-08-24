@@ -1,3 +1,10 @@
+substitutions:
+  # Set this to wherever matrix_display_server (node server.js) actually runs.
+  # This is the ONLY line you should need to edit before flashing — it's baked
+  # in as the boot default, so you don't need to reach the device live via
+  # Home Assistant afterward to configure it.
+  matrix_server_url: "http://192.168.178.50:3000"
+
 esphome:
   name: matrix-display
   friendly_name: Matrix Display
@@ -53,7 +60,10 @@ wifi:
 http_request:
   id: http_request_id
   useragent: esphome/matrix-display
-  timeout: 10s
+  # Kept well under the task watchdog window (~5s default). A slower/unreachable
+  # server should fail fast rather than block the main loop long enough to trip it.
+  timeout: 3s
+  watchdog_timeout: 10s
 
 text_sensor:
   - platform: wifi_info
@@ -64,10 +74,10 @@ text_sensor:
 text:
   - platform: template
     name: "Matrix Server URL"
-    id: server_url
+    id: matrix_server_addr
     mode: text
     optimistic: true
-    initial_value: "http://192.168.1.100:3000"
+    initial_value: "${matrix_server_url}"
     restore_value: true
 
 sensor:
@@ -226,7 +236,7 @@ interval:
     then:
       - http_request.get:
           url: !lambda |-
-            std::string base = id(server_url).state;
+            std::string base = id(matrix_server_addr).state;
             while (!base.empty() && base.back() == '/') base.pop_back();
             return base + "/api/esp/pixels";
           capture_response: true
