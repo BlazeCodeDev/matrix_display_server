@@ -93,19 +93,33 @@ async function haFetch(pathname) {
   }
 }
 
-// Resolve a text element's displayed string: entity-bound elements fetch
-// their live state from Home Assistant, static ones pass through unchanged.
-async function resolveElementText(el) {
-  if (el.type !== 'text' || !el.entityId) return el;
-  const state = await haFetch(`/api/states/${encodeURIComponent(el.entityId)}`);
-  if (!state) return { ...el, text: el.text || '?' };
-  const unit = state.attributes?.unit_of_measurement;
-  const text = unit ? `${state.state}${unit}` : state.state;
-  return { ...el, text };
+// Resolve an entity-bound element against its live Home Assistant state:
+// text elements get the formatted state string, bars get a clamped numeric
+// value. Static (non-entity-bound) elements pass through unchanged.
+async function resolveElement(el) {
+  if (!el.entityId) return el;
+
+  if (el.type === 'text') {
+    const state = await haFetch(`/api/states/${encodeURIComponent(el.entityId)}`);
+    if (!state) return { ...el, text: el.text || '?' };
+    const unit = state.attributes?.unit_of_measurement;
+    const text = unit ? `${state.state}${unit}` : state.state;
+    return { ...el, text };
+  }
+
+  if (el.type === 'bar') {
+    const state = await haFetch(`/api/states/${encodeURIComponent(el.entityId)}`);
+    if (!state) return el; // keep last known value rather than zeroing the bar
+    const value = parseFloat(state.state);
+    if (Number.isNaN(value)) return el;
+    return { ...el, value };
+  }
+
+  return el;
 }
 
 async function resolveFrameElements(frameElements) {
-  return Promise.all(frameElements.map(resolveElementText));
+  return Promise.all(frameElements.map(resolveElement));
 }
 
 // API Routes
@@ -466,7 +480,33 @@ function getElementPixels(el) {
       }
     }
   }
-  
+  else if (el.type === 'bar') {
+    const color2 = el.color2 || color;
+    const min = el.min ?? 0;
+    const max = el.max ?? 100;
+    const value = el.value ?? min;
+    const frac = max === min ? 0 : Math.max(0, Math.min(1, (value - min) / (max - min)));
+    const filledWidth = Math.round(frac * el.width);
+
+    for (let dx = 0; dx < el.width; dx++) {
+      const t = el.width > 1 ? dx / (el.width - 1) : 0;
+      const full = {
+        r: Math.round(color.r + (color2.r - color.r) * t),
+        g: Math.round(color.g + (color2.g - color.g) * t),
+        b: Math.round(color.b + (color2.b - color.b) * t)
+      };
+      const isFilled = dx < filledWidth;
+      const c = isFilled ? full : { r: Math.round(full.r * 0.15), g: Math.round(full.g * 0.15), b: Math.round(full.b * 0.15) };
+      for (let dy = 0; dy < el.height; dy++) {
+        const px = el.x + dx;
+        const py = el.y + dy;
+        if (px >= 0 && px < 64 && py >= 0 && py < 32) {
+          pixels.push({ x: px, y: py, r: c.r, g: c.g, b: c.b });
+        }
+      }
+    }
+  }
+
   return pixels;
 }
 

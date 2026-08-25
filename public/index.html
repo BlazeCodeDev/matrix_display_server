@@ -349,6 +349,13 @@ const App = () => {
   const [entitySearching, setEntitySearching] = useState(false);
   const [selectedEntity, setSelectedEntity] = useState(null);
   const [entityPreviewText, setEntityPreviewText] = useState('');
+  const [entityPreviewValue, setEntityPreviewValue] = useState(0);
+  const [barMode, setBarMode] = useState('static');
+  const [barMin, setBarMin] = useState(0);
+  const [barMax, setBarMax] = useState(100);
+  const [barValue, setBarValue] = useState(50);
+  const [barGradient, setBarGradient] = useState(false);
+  const [barColor2, setBarColor2] = useState({ r: 0, g: 255, b: 0 });
   const [filled, setFilled] = useState(false);
   const [screenName, setScreenName] = useState('Untitled');
   const [dragMode, setDragMode] = useState(null);
@@ -459,8 +466,10 @@ const App = () => {
       const res = await fetch(`/api/ha/state/${encodeURIComponent(entity.entityId)}`);
       const data = await res.json();
       setEntityPreviewText(res.ok ? data.text : entity.state);
+      setEntityPreviewValue(parseFloat(res.ok ? data.state : entity.state) || 0);
     } catch (e) {
       setEntityPreviewText(entity.state);
+      setEntityPreviewValue(parseFloat(entity.state) || 0);
     }
   };
 
@@ -633,6 +642,7 @@ const App = () => {
     { id: 'rect', name: 'Rect', icon: 'crop_square' },
     { id: 'circle', name: 'Circle', icon: 'circle' },
     { id: 'text', name: 'Text', icon: 'text_fields' },
+    { id: 'bar', name: 'Progress Bar', icon: 'bar_chart' },
     { id: 'eraser', name: 'Eraser', icon: 'ink_eraser' },
   ];
 
@@ -707,13 +717,35 @@ const App = () => {
           }
         }
       }
+    } else if (el.type === 'bar') {
+      const color2 = el.color2 || el.color;
+      const min = el.min ?? 0, max = el.max ?? 100;
+      const value = el.value ?? min;
+      const frac = max === min ? 0 : Math.max(0, Math.min(1, (value - min) / (max - min)));
+      const filledWidth = Math.round(frac * el.width);
+      for (let dx = 0; dx < el.width; dx++) {
+        const t = el.width > 1 ? dx / (el.width - 1) : 0;
+        const full = {
+          r: Math.round(el.color.r + (color2.r - el.color.r) * t),
+          g: Math.round(el.color.g + (color2.g - el.color.g) * t),
+          b: Math.round(el.color.b + (color2.b - el.color.b) * t),
+        };
+        const isFilled = dx < filledWidth;
+        const c = isFilled ? full : { r: Math.round(full.r * 0.15), g: Math.round(full.g * 0.15), b: Math.round(full.b * 0.15) };
+        for (let dy = 0; dy < el.height; dy++) {
+          const px = el.x + dx, py = el.y + dy;
+          if (px >= 0 && px < CANVAS_WIDTH && py >= 0 && py < CANVAS_HEIGHT) {
+            pixels.push({ x: px, y: py, color: c });
+          }
+        }
+      }
     }
     return pixels;
   };
 
   const getElementBounds = (el) => {
     if (el.type === 'pixel') return { x: el.x, y: el.y, width: 1, height: 1 };
-    if (el.type === 'rect') return { x: el.x, y: el.y, width: el.width, height: el.height };
+    if (el.type === 'rect' || el.type === 'bar') return { x: el.x, y: el.y, width: el.width, height: el.height };
     if (el.type === 'circle') return { x: el.cx - el.r, y: el.cy - el.r, width: el.r * 2 + 1, height: el.r * 2 + 1 };
     if (el.type === 'line') return { x: Math.min(el.x1, el.x2), y: Math.min(el.y1, el.y2), width: Math.abs(el.x2 - el.x1) + 1, height: Math.abs(el.y2 - el.y1) + 1 };
     if (el.type === 'text') {
@@ -730,7 +762,7 @@ const App = () => {
       if (Math.abs(pos.x - el.x1) <= 1 && Math.abs(pos.y - el.y1) <= 1) return 'line-start';
       if (Math.abs(pos.x - el.x2) <= 1 && Math.abs(pos.y - el.y2) <= 1) return 'line-end';
     }
-    if (el.type === 'rect' || el.type === 'circle') {
+    if (el.type === 'rect' || el.type === 'circle' || el.type === 'bar') {
       const { x, y, width, height } = bounds;
       if (Math.abs(pos.x - (x + width)) <= 1 && Math.abs(pos.y - (y + height)) <= 1) return 'resize-br';
       if (Math.abs(pos.x - x) <= 1 && Math.abs(pos.y - y) <= 1) return 'resize-tl';
@@ -788,12 +820,12 @@ const App = () => {
         if (el.id !== originalElement.id) return el;
         if (dragMode === 'move') {
           if (el.type === 'pixel') return { ...el, x: originalElement.x + dx, y: originalElement.y + dy };
-          if (el.type === 'rect' || el.type === 'text') return { ...el, x: originalElement.x + dx, y: originalElement.y + dy };
+          if (el.type === 'rect' || el.type === 'text' || el.type === 'bar') return { ...el, x: originalElement.x + dx, y: originalElement.y + dy };
           if (el.type === 'circle') return { ...el, cx: originalElement.cx + dx, cy: originalElement.cy + dy };
           if (el.type === 'line') return { ...el, x1: originalElement.x1 + dx, y1: originalElement.y1 + dy, x2: originalElement.x2 + dx, y2: originalElement.y2 + dy };
         }
-        if (el.type === 'rect' && dragMode === 'resize-br') return { ...el, width: Math.max(1, originalElement.width + dx), height: Math.max(1, originalElement.height + dy) };
-        if (el.type === 'rect' && dragMode === 'resize-tl') return { ...el, x: originalElement.x + dx, y: originalElement.y + dy, width: Math.max(1, originalElement.width - dx), height: Math.max(1, originalElement.height - dy) };
+        if ((el.type === 'rect' || el.type === 'bar') && dragMode === 'resize-br') return { ...el, width: Math.max(1, originalElement.width + dx), height: Math.max(1, originalElement.height + dy) };
+        if ((el.type === 'rect' || el.type === 'bar') && dragMode === 'resize-tl') return { ...el, x: originalElement.x + dx, y: originalElement.y + dy, width: Math.max(1, originalElement.width - dx), height: Math.max(1, originalElement.height - dy) };
         if (el.type === 'circle' && dragMode.startsWith('resize')) return { ...el, r: Math.max(1, Math.round(Math.sqrt(Math.pow(pos.x - originalElement.cx, 2) + Math.pow(pos.y - originalElement.cy, 2)))) };
         if (el.type === 'line' && dragMode === 'line-start') return { ...el, x1: pos.x, y1: pos.y };
         if (el.type === 'line' && dragMode === 'line-end') return { ...el, x2: pos.x, y2: pos.y };
@@ -809,6 +841,22 @@ const App = () => {
       setPreviewElement({ type: 'rect', x: Math.min(startPos.x, pos.x), y: Math.min(startPos.y, pos.y), width: Math.abs(pos.x - startPos.x) + 1, height: Math.abs(pos.y - startPos.y) + 1, filled, color: { ...currentColor } });
     } else if (selectedTool === 'circle') {
       setPreviewElement({ type: 'circle', cx: startPos.x, cy: startPos.y, r: Math.round(Math.sqrt(Math.pow(pos.x - startPos.x, 2) + Math.pow(pos.y - startPos.y, 2))), filled, color: { ...currentColor } });
+    } else if (selectedTool === 'bar') {
+      const barEl = {
+        type: 'bar',
+        x: Math.min(startPos.x, pos.x), y: Math.min(startPos.y, pos.y),
+        width: Math.abs(pos.x - startPos.x) + 1, height: Math.abs(pos.y - startPos.y) + 1,
+        color: { ...currentColor },
+        color2: barGradient ? { ...barColor2 } : null,
+        min: barMin, max: barMax,
+      };
+      if (barMode === 'entity' && selectedEntity) {
+        barEl.entityId = selectedEntity.entityId;
+        barEl.value = entityPreviewValue;
+      } else {
+        barEl.value = barValue;
+      }
+      setPreviewElement(barEl);
     } else if (selectedTool === 'eraser') {
       removeElementAt(pos);
     }
@@ -1083,6 +1131,84 @@ const App = () => {
                 </select>
               </div>
             )}
+            {selectedTool === 'bar' && (
+              <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <button className={`m3-btn m3-btn-sm ${barMode === 'static' ? 'm3-btn-tonal' : 'm3-btn-outlined'}`} style={{ flex: 1 }} onClick={() => setBarMode('static')}>Static</button>
+                  <button className={`m3-btn m3-btn-sm ${barMode === 'entity' ? 'm3-btn-tonal' : 'm3-btn-outlined'}`} style={{ flex: 1 }} onClick={() => setBarMode('entity')}>Live entity</button>
+                </div>
+
+                {barMode === 'static' ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <input type="range" min="0" max="100" value={barValue} onChange={(e) => setBarValue(parseInt(e.target.value))} style={{ flex: 1 }} />
+                    <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', width: 28, textAlign: 'right' }}>{barValue}</span>
+                  </div>
+                ) : (
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      type="text"
+                      value={entityQuery}
+                      onChange={(e) => { setEntityQuery(e.target.value); setSelectedEntity(null); }}
+                      className="m3-input"
+                      style={{ width: '100%' }}
+                      placeholder="Search HA entities…"
+                    />
+                    {!haHasToken && (
+                      <div style={{ fontSize: 10, color: 'var(--md-error)', marginTop: 4 }}>
+                        Set up Home Assistant in Settings first.
+                      </div>
+                    )}
+                    {entitySuggestions.length > 0 && (
+                      <div style={{ marginTop: 4, maxHeight: 160, overflowY: 'auto', background: 'var(--md-surface-container-highest)', borderRadius: 'var(--md-shape-sm)' }}>
+                        {entitySuggestions.map(en => (
+                          <div key={en.entityId} onClick={() => pickEntity(en)} style={{ padding: '6px 8px', cursor: 'pointer', fontSize: 11 }} className="m3-list-item">
+                            <div style={{ color: 'var(--md-on-surface)' }}>{en.name}</div>
+                            <div style={{ color: 'var(--md-on-surface-variant)', fontSize: 10 }}>{en.entityId} — {en.state}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {selectedEntity && (
+                      <div className="m3-chip" style={{ marginTop: 6 }}>
+                        {selectedEntity.entityId} = {entityPreviewValue}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                      <div style={{ flex: 1 }}>
+                        <label className="m3-field-label" style={{ marginBottom: 2 }}>Min</label>
+                        <input type="number" value={barMin} onChange={(e) => setBarMin(parseFloat(e.target.value) || 0)} className="m3-input" style={{ width: '100%', height: 32 }} />
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <label className="m3-field-label" style={{ marginBottom: 2 }}>Max</label>
+                        <input type="number" value={barMax} onChange={(e) => setBarMax(parseFloat(e.target.value) || 100)} className="m3-input" style={{ width: '100%', height: 32 }} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--md-on-surface-variant)', cursor: 'pointer' }}>
+                  <div className={`m3-switch${barGradient ? ' on' : ''}`} onClick={() => setBarGradient(!barGradient)} style={{ width: 36, height: 22 }}>
+                    <div className="thumb" style={{ width: barGradient ? 14 : 10, height: barGradient ? 14 : 10, left: barGradient ? 17 : 5 }} />
+                  </div>
+                  Multicolor gradient
+                </label>
+                {barGradient && (
+                  <div>
+                    <label className="m3-field-label" style={{ marginBottom: 4 }}>End Color</label>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {presetColors.map((c, i) => (
+                        <div key={i} onClick={() => setBarColor2(c)} style={{
+                          width: 20, height: 20, borderRadius: 'var(--md-shape-xs)', cursor: 'pointer',
+                          backgroundColor: `rgb(${c.r}, ${c.g}, ${c.b})`,
+                          outline: barColor2.r === c.r && barColor2.g === c.g && barColor2.b === c.b ? '2px solid var(--md-primary)' : '2px solid transparent',
+                          outlineOffset: 2,
+                        }} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="m3-panel">
@@ -1120,6 +1246,18 @@ const App = () => {
                   <input type="text" value={selectedElement.text} onChange={(e) => setElements(prev => prev.map(el => el.id === selectedElement.id ? { ...el, text: e.target.value } : el))} className="m3-input" style={{ width: '100%', marginBottom: 10 }} />
                 )
               )}
+              {selectedElement.type === 'bar' && (
+                selectedElement.entityId ? (
+                  <div className="m3-chip" style={{ marginBottom: 10, display: 'block' }}>
+                    {selectedElement.entityId} ({selectedElement.min}–{selectedElement.max}, live)
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                    <input type="range" min="0" max="100" value={selectedElement.value} onChange={(e) => setElements(prev => prev.map(el => el.id === selectedElement.id ? { ...el, value: parseInt(e.target.value) } : el))} style={{ flex: 1 }} />
+                    <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', width: 28, textAlign: 'right' }}>{selectedElement.value}</span>
+                  </div>
+                )
+              )}
               <button onClick={deleteSelected} className="m3-btn m3-btn-danger" style={{ width: '100%' }}><Icon name="delete" size={16} /> Delete</button>
             </div>
           )}
@@ -1133,7 +1271,12 @@ const App = () => {
                 color: selectedElement?.id === el.id ? 'var(--md-on-secondary-container)' : 'var(--md-on-surface-variant)',
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
               }}>
-                <span>{el.type === 'text' ? (el.entityId ? `@ ${el.entityId.split('.').pop().slice(0,8)}` : `T "${el.text.slice(0,6)}"`) : el.type}</span>
+                <span>{
+                  el.entityId ? `@ ${el.entityId.split('.').pop().slice(0,8)}` :
+                  el.type === 'text' ? `T "${el.text.slice(0,6)}"` :
+                  el.type === 'bar' ? `▤ ${el.value}` :
+                  el.type
+                }</span>
                 <div style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: `rgb(${el.color.r}, ${el.color.g}, ${el.color.b})` }} />
               </div>
             ))}
