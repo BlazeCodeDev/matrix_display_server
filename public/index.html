@@ -348,7 +348,34 @@ const COMMON_ICONS = [
   'volume_up', 'volume_off', 'mic', 'light_mode', 'dark_mode',
   'local_fire_department', 'air', 'speed', 'sync', 'settings', 'person',
   'directions_car', 'ev_station', 'garage', 'videocam', 'music_note',
+  'memory', 'hard_drive', 'lan', 'dns', 'router',
 ];
+
+// Colloquial terms people type that aren't literal Material Symbols names
+// (there's no "cpu" icon — the closest is the RAM-chip "memory" glyph).
+// Offered as a "did you mean" suggestion rather than silently rewriting
+// whatever was typed.
+const ICON_ALIASES = {
+  cpu: 'memory', processor: 'memory', ram: 'memory', gpu: 'memory', chip: 'memory',
+  disk: 'hard_drive', harddrive: 'hard_drive', hdd: 'hard_drive', ssd: 'hard_drive',
+  network: 'wifi', internet: 'wifi', ethernet: 'lan',
+  temp: 'thermostat', temperature: 'thermostat', humidity: 'water_drop',
+};
+
+// An icon ligature font doesn't leave unknown names blank — "cpu" falls back
+// to drawing the individual letters c/p/u as real (if odd-looking) glyphs,
+// which is the "weird font" text the search box would otherwise show. But a
+// resolved ligature always advances by exactly one glyph (1em), while N
+// unresolved fallback characters advance by N glyphs — so measuring text
+// width tells known and unknown names apart even though both render *something*.
+let iconMeasureCanvas = null;
+function isKnownIconName(name, size) {
+  if (!name) return false;
+  if (!iconMeasureCanvas) iconMeasureCanvas = document.createElement('canvas');
+  const ctx = iconMeasureCanvas.getContext('2d');
+  ctx.font = `${size}px "Material Symbols Outlined"`;
+  return ctx.measureText(name).width <= size * 1.5;
+}
 
 // Rendering a Material Symbols glyph straight at its final pixel size (rather
 // than drawing it large and downscaling) lets the browser's own font hinting
@@ -927,10 +954,14 @@ const App = () => {
       }
     } else if (selectedTool === 'icon') {
       if (!iconFontReady) return;
+      const trimmedIconName = iconName.trim();
+      if (!isKnownIconName(trimmedIconName, iconSize)) return; // unknown icon name — nothing to place
+      const bitmap = rasterizeIcon(trimmedIconName, iconSize);
+      if (!bitmap.length) return; // too detailed to show anything at this size
       const half = Math.floor(iconSize / 2);
       addElement({
-        type: 'icon', x: pos.x - half, y: pos.y - half, name: iconName, size: iconSize,
-        color: { ...currentColor }, bitmap: rasterizeIcon(iconName, iconSize),
+        type: 'icon', x: pos.x - half, y: pos.y - half, name: trimmedIconName, size: iconSize,
+        color: { ...currentColor }, bitmap,
       });
     } else if (selectedTool === 'eraser') {
       removeElementAt(pos);
@@ -1286,12 +1317,18 @@ const App = () => {
                 </select>
               </div>
             )}
-            {selectedTool === 'icon' && (
+            {selectedTool === 'icon' && (() => {
+              const trimmedName = iconName.trim();
+              const iconKnown = !trimmedName || !iconFontReady || isKnownIconName(trimmedName, iconSize);
+              const suggestion = !iconKnown ? ICON_ALIASES[trimmedName.toLowerCase().replace(/[^a-z0-9]/g, '')] : null;
+              // A real icon can still rasterize to nothing at a too-small size.
+              const tooSmall = iconKnown && iconFontReady && trimmedName && rasterizeIcon(trimmedName, iconSize).length === 0;
+              return (
               <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <input
                   type="text"
                   value={iconName}
-                  onChange={(e) => setIconName(e.target.value.trim())}
+                  onChange={(e) => setIconName(e.target.value)}
                   className="m3-input"
                   placeholder="Icon name, e.g. wifi"
                 />
@@ -1302,9 +1339,9 @@ const App = () => {
                   <div style={{
                     width: 40, height: 40, borderRadius: 'var(--md-shape-sm)', background: 'var(--md-surface-container-highest)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                    color: `rgb(${currentColor.r}, ${currentColor.g}, ${currentColor.b})`,
+                    color: iconKnown ? `rgb(${currentColor.r}, ${currentColor.g}, ${currentColor.b})` : 'var(--md-on-surface-variant)',
                   }}>
-                    <Icon name={iconName || 'help'} size={Math.min(28, iconSize)} />
+                    <Icon name={iconKnown ? (trimmedName || 'help') : 'search_off'} size={Math.min(28, iconSize)} />
                   </div>
                   <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
                     <input type="range" min="6" max="32" value={iconSize} onChange={(e) => setIconSize(parseInt(e.target.value))} style={{ flex: 1 }} />
@@ -1314,6 +1351,19 @@ const App = () => {
                 {!iconFontReady && (
                   <div style={{ fontSize: 10, color: 'var(--md-on-surface-variant)' }}>Loading icon font…</div>
                 )}
+                {iconFontReady && !iconKnown && (
+                  <div style={{ fontSize: 10, color: 'var(--md-error)' }}>
+                    "{trimmedName}" isn't a Material Symbols icon.
+                    {suggestion && (
+                      <> Try <span onClick={() => setIconName(suggestion)} style={{ textDecoration: 'underline', cursor: 'pointer' }}>{suggestion}</span>.</>
+                    )}
+                  </div>
+                )}
+                {tooSmall && (
+                  <div style={{ fontSize: 10, color: 'var(--md-error)' }}>
+                    "{trimmedName}" is too detailed to show anything at {iconSize}px — try a bigger size.
+                  </div>
+                )}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 4 }}>
                   {COMMON_ICONS.map(name => (
                     <button
@@ -1321,14 +1371,15 @@ const App = () => {
                       onClick={() => setIconName(name)}
                       title={name}
                       className="m3-icon-btn m3-icon-btn-sm"
-                      style={name === iconName ? { background: 'var(--md-secondary-container)', color: 'var(--md-on-secondary-container)' } : undefined}
+                      style={name === trimmedName ? { background: 'var(--md-secondary-container)', color: 'var(--md-on-secondary-container)' } : undefined}
                     >
                       <Icon name={name} size={16} />
                     </button>
                   ))}
                 </div>
               </div>
-            )}
+              );
+            })()}
             {selectedTool === 'bar' && (
               <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ display: 'flex', gap: 4 }}>
@@ -1474,6 +1525,13 @@ const App = () => {
                     />
                     <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', width: 32, textAlign: 'right' }}>{selectedElement.size}px</span>
                   </div>
+                  {selectedElement.bitmap?.length === 0 && (
+                    <div style={{ fontSize: 10, color: 'var(--md-error)', marginTop: 6 }}>
+                      {isKnownIconName(selectedElement.name, selectedElement.size)
+                        ? `"${selectedElement.name}" is too detailed to show anything at ${selectedElement.size}px — try a bigger size.`
+                        : `"${selectedElement.name}" isn't a Material Symbols icon — nothing will show on the display.`}
+                    </div>
+                  )}
                 </div>
               )}
               {selectedElement.type === 'bar' && (
