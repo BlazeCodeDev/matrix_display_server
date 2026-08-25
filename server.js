@@ -563,6 +563,19 @@ function getElementPixels(el) {
       }
     });
   }
+  else if (el.type === 'image') {
+    // Imported images are rasterized in the browser (Canvas, plus an <img>
+    // decode that also handles SVG) and shipped as a {row,col,r,g,b}
+    // bitmap at save time — each pixel keeps its own color from the
+    // source, unlike the icon bitmap's single el.color tint.
+    (el.bitmap || []).forEach(p => {
+      const px = el.x + p.col;
+      const py = el.y + p.row;
+      if (px >= 0 && px < 64 && py >= 0 && py < 32) {
+        pixels.push({ x: px, y: py, r: p.r, g: p.g, b: p.b });
+      }
+    });
+  }
   else if (el.type === 'line') {
     const points = getLinePoints(el.x1, el.y1, el.x2, el.y2);
     points.forEach(p => pixels.push({ x: p.x, y: p.y, r: color.r, g: color.g, b: color.b }));

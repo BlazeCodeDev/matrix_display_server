@@ -446,6 +446,62 @@ function rasterizeIcon(name, size) {
   return points;
 }
 
+// Imported images (raster or SVG — the browser rasterizes SVG data URLs the
+// same as any other <img>) are downsampled straight to their placed size by
+// drawing into a size×size canvas, so scaling quality is whatever the
+// browser's own drawImage smoothing gives us. Each opaque pixel keeps its
+// own color (unlike an icon's single-tint bitmap), and near-transparent
+// pixels are dropped rather than composited, so imports with transparency
+// don't leave a dark halo on the LED grid.
+let imageRasterCanvas = null;
+function rasterizeImageToBitmap(img, width, height) {
+  if (!img || width <= 0 || height <= 0) return { bitmap: [], dataUrl: '' };
+  if (!imageRasterCanvas) imageRasterCanvas = document.createElement('canvas');
+  const canvas = imageRasterCanvas;
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, width, height);
+  ctx.drawImage(img, 0, 0, width, height);
+  const data = ctx.getImageData(0, 0, width, height).data;
+  const bitmap = [];
+  for (let row = 0; row < height; row++) {
+    for (let col = 0; col < width; col++) {
+      const i = (row * width + col) * 4;
+      if (data[i + 3] < 128) continue;
+      bitmap.push({ row, col, r: data[i], g: data[i + 1], b: data[i + 2] });
+    }
+  }
+  return { bitmap, dataUrl: canvas.toDataURL() };
+}
+
+// Resizing a placed image resamples from its own (already small) bitmap
+// instead of going back to the source — the source isn't kept around after
+// import (it'd mean storing a base64 copy on every element), and at LED
+// resolution re-sampling a low-res bitmap looks no worse than re-decoding.
+function resampleBitmap(bitmap, oldW, oldH, newW, newH) {
+  if (oldW <= 0 || oldH <= 0 || newW <= 0 || newH <= 0) return [];
+  const grid = new Map(bitmap.map(p => [`${p.row},${p.col}`, p]));
+  const out = [];
+  for (let row = 0; row < newH; row++) {
+    const srcRow = Math.min(oldH - 1, Math.floor(row * oldH / newH));
+    for (let col = 0; col < newW; col++) {
+      const srcCol = Math.min(oldW - 1, Math.floor(col * oldW / newW));
+      const p = grid.get(`${srcRow},${srcCol}`);
+      if (p) out.push({ row, col, r: p.r, g: p.g, b: p.b });
+    }
+  }
+  return out;
+}
+
+// Fits an imported image's natural size within a maxDim×maxDim box,
+// preserving aspect ratio, so it lands on the canvas at a sane default size.
+function fitImportDims(naturalW, naturalH, maxDim = 24) {
+  if (!naturalW || !naturalH) return { width: maxDim, height: maxDim };
+  const scale = Math.min(1, maxDim / Math.max(naturalW, naturalH));
+  return { width: Math.max(1, Math.round(naturalW * scale)), height: Math.max(1, Math.round(naturalH * scale)) };
+}
+
 const rgbToHex = (c) => '#' + [c.r, c.g, c.b].map(v => v.toString(16).padStart(2, '0')).join('');
 const hexToRgb = (hex) => ({ r: parseInt(hex.slice(1, 3), 16), g: parseInt(hex.slice(3, 5), 16), b: parseInt(hex.slice(5, 7), 16) });
 
@@ -704,6 +760,15 @@ const App = () => {
   const [iconName, setIconName] = useState('wifi');
   const [iconSize, setIconSize] = useState(16);
   const [iconFontReady, setIconFontReady] = useState(false);
+  // Pending image/vector import: the loaded <img> plus the size the user has
+  // dialed in, re-rasterized (see the effect below) each time either
+  // changes — click-to-place then stamps the current preview bitmap, same
+  // flow as the icon tool's name+size.
+  const [importImage, setImportImage] = useState(null);
+  const [importImageName, setImportImageName] = useState('');
+  const [importSize, setImportSize] = useState({ width: 16, height: 16 });
+  const [importPreview, setImportPreview] = useState({ bitmap: [], dataUrl: '' });
+  const imageFileInputRef = useRef(null);
   const [filled, setFilled] = useState(false);
   const [brushSize, setBrushSize] = useState(1);
   const [eraserSize, setEraserSize] = useState(1);
@@ -1236,6 +1301,31 @@ const App = () => {
     }
   };
 
+  // Re-rasterize the pending import whenever the loaded image or the chosen
+  // size changes, so the size sliders update the preview live.
+  useEffect(() => {
+    if (!importImage) { setImportPreview({ bitmap: [], dataUrl: '' }); return; }
+    setImportPreview(rasterizeImageToBitmap(importImage, importSize.width, importSize.height));
+  }, [importImage, importSize.width, importSize.height]);
+
+  const handleImageFileChange = (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        setImportImage(img);
+        setImportSize(fitImportDims(img.naturalWidth || img.width, img.naturalHeight || img.height));
+        setImportImageName(file.name.replace(/\.[^.]+$/, ''));
+      };
+      img.onerror = () => console.error('Failed to decode image:', file.name);
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  };
+
   // Animation playback
   useEffect(() => {
     if (!isPlaying) return;
@@ -1271,6 +1361,7 @@ const App = () => {
     { id: 'text', name: 'Text', icon: 'text_fields' },
     { id: 'icon', name: 'Icon', icon: 'emoji_symbols' },
     { id: 'bar', name: 'Progress Bar', icon: 'bar_chart' },
+    { id: 'image', name: 'Image', icon: 'image' },
     { id: 'eraser', name: 'Eraser', icon: 'ink_eraser' },
   ];
 
@@ -1340,6 +1431,20 @@ const App = () => {
     return pixels;
   };
 
+  // Unlike an icon's bitmap (a silhouette tinted by one el.color), an
+  // imported image's bitmap already carries each pixel's own color from the
+  // source, so there's no color argument to apply here.
+  const getImagePixels = (el) => {
+    const pixels = [];
+    for (const p of (el.bitmap || [])) {
+      const px = el.x + p.col, py = el.y + p.row;
+      if (px >= 0 && px < CANVAS_WIDTH && py >= 0 && py < CANVAS_HEIGHT) {
+        pixels.push({ x: px, y: py, color: { r: p.r, g: p.g, b: p.b } });
+      }
+    }
+    return pixels;
+  };
+
   // Pick the color for the highest colorRules threshold the value meets or
   // exceeds, e.g. [{threshold:80,color:red}] recolors once value >= 80.
   const applyColorRules = (baseColor, colorRules, value) => {
@@ -1363,6 +1468,8 @@ const App = () => {
       return getTextPixels(el.text, el.x, el.y, el.fontSize, el.color, el.maxWidth);
     } else if (el.type === 'icon') {
       return getIconPixels(el.name, el.x, el.y, el.size, el.color);
+    } else if (el.type === 'image') {
+      return getImagePixels(el);
     } else if (el.type === 'line') {
       const points = getLinePoints(el.x1, el.y1, el.x2, el.y2);
       points.forEach(p => pixels.push({ x: p.x, y: p.y, color: el.color }));
@@ -1426,6 +1533,7 @@ const App = () => {
       return { x: el.x, y: el.y, width: el.maxWidth || naturalWidth, height: font.height };
     }
     if (el.type === 'icon') return { x: el.x, y: el.y, width: el.size, height: el.size };
+    if (el.type === 'image') return { x: el.x, y: el.y, width: el.width, height: el.height };
     return { x: 0, y: 0, width: 1, height: 1 };
   };
 
@@ -1436,7 +1544,7 @@ const App = () => {
       if (Math.abs(pos.x - el.x1) <= 1 && Math.abs(pos.y - el.y1) <= 1) return 'line-start';
       if (Math.abs(pos.x - el.x2) <= 1 && Math.abs(pos.y - el.y2) <= 1) return 'line-end';
     }
-    if (el.type === 'rect' || el.type === 'circle' || el.type === 'bar' || el.type === 'icon') {
+    if (el.type === 'rect' || el.type === 'circle' || el.type === 'bar' || el.type === 'icon' || el.type === 'image') {
       const { x, y, width, height } = bounds;
       if (Math.abs(pos.x - (x + width)) <= 1 && Math.abs(pos.y - (y + height)) <= 1) return 'resize-br';
       if (Math.abs(pos.x - x) <= 1 && Math.abs(pos.y - y) <= 1) return 'resize-tl';
@@ -1497,6 +1605,12 @@ const App = () => {
         type: 'icon', x: pos.x - half, y: pos.y - half, name: trimmedIconName, size: iconSize,
         color: { ...currentColor }, bitmap,
       });
+    } else if (selectedTool === 'image') {
+      if (!importPreview.bitmap.length) return;
+      addElement({
+        type: 'image', x: pos.x - Math.floor(importSize.width / 2), y: pos.y - Math.floor(importSize.height / 2),
+        width: importSize.width, height: importSize.height, name: importImageName, bitmap: importPreview.bitmap,
+      });
     } else if (selectedTool === 'eraser') {
       removeElementsInArea(pos, eraserSize);
     }
@@ -1512,7 +1626,7 @@ const App = () => {
         if (el.id !== originalElement.id) return el;
         if (dragMode === 'move') {
           if (el.type === 'pixel') return { ...el, x: originalElement.x + dx, y: originalElement.y + dy };
-          if (el.type === 'rect' || el.type === 'text' || el.type === 'bar' || el.type === 'icon') return { ...el, x: originalElement.x + dx, y: originalElement.y + dy };
+          if (el.type === 'rect' || el.type === 'text' || el.type === 'bar' || el.type === 'icon' || el.type === 'image') return { ...el, x: originalElement.x + dx, y: originalElement.y + dy };
           if (el.type === 'circle') return { ...el, cx: originalElement.cx + dx, cy: originalElement.cy + dy };
           if (el.type === 'line') return { ...el, x1: originalElement.x1 + dx, y1: originalElement.y1 + dy, x2: originalElement.x2 + dx, y2: originalElement.y2 + dy };
         }
@@ -1525,6 +1639,17 @@ const App = () => {
         if (el.type === 'icon' && dragMode === 'resize-tl') {
           const size = Math.max(4, originalElement.size - Math.round((dx + dy) / 2));
           return { ...el, x: originalElement.x + dx, y: originalElement.y + dy, size, bitmap: rasterizeIcon(el.name, size) };
+        }
+        if (el.type === 'image' && dragMode === 'resize-br') {
+          const width = Math.max(1, originalElement.width + dx), height = Math.max(1, originalElement.height + dy);
+          return { ...el, width, height, bitmap: resampleBitmap(originalElement.bitmap, originalElement.width, originalElement.height, width, height) };
+        }
+        if (el.type === 'image' && dragMode === 'resize-tl') {
+          const width = Math.max(1, originalElement.width - dx), height = Math.max(1, originalElement.height - dy);
+          return {
+            ...el, x: originalElement.x + dx, y: originalElement.y + dy, width, height,
+            bitmap: resampleBitmap(originalElement.bitmap, originalElement.width, originalElement.height, width, height),
+          };
         }
         if (el.type === 'circle' && dragMode.startsWith('resize')) return { ...el, r: Math.max(1, Math.round(Math.sqrt(Math.pow(pos.x - originalElement.cx, 2) + Math.pow(pos.y - originalElement.cy, 2)))) };
         if (el.type === 'line' && dragMode === 'line-start') return { ...el, x1: pos.x, y1: pos.y };
@@ -2066,6 +2191,51 @@ const App = () => {
               </div>
               );
             })()}
+            {selectedTool === 'image' && (
+              <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <input
+                  ref={imageFileInputRef}
+                  type="file"
+                  accept="image/*,.svg"
+                  onChange={handleImageFileChange}
+                  style={{ display: 'none' }}
+                />
+                <button className="m3-btn m3-btn-outlined m3-btn-sm" onClick={() => imageFileInputRef.current?.click()}>
+                  <Icon name="upload" size={14} /> {importImageName ? 'Replace image' : 'Choose image'}
+                </button>
+                {importImageName && (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <div style={{
+                        width: 40, height: 40, borderRadius: 'var(--md-shape-sm)', background: 'var(--md-surface-container-highest)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, overflow: 'hidden',
+                      }}>
+                        {importPreview.dataUrl && (
+                          <img src={importPreview.dataUrl} style={{ width: '100%', height: '100%', objectFit: 'contain', imageRendering: 'pixelated' }} />
+                        )}
+                      </div>
+                      <span style={{ fontSize: 11, color: 'var(--md-on-surface-variant)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {importImageName}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', width: 10 }}>W</span>
+                      <input type="range" min="1" max={CANVAS_WIDTH} value={importSize.width} onChange={(e) => setImportSize(s => ({ ...s, width: parseInt(e.target.value) }))} style={{ flex: 1 }} />
+                      <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', width: 28, textAlign: 'right' }}>{importSize.width}px</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', width: 10 }}>H</span>
+                      <input type="range" min="1" max={CANVAS_HEIGHT} value={importSize.height} onChange={(e) => setImportSize(s => ({ ...s, height: parseInt(e.target.value) }))} style={{ flex: 1 }} />
+                      <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', width: 28, textAlign: 'right' }}>{importSize.height}px</span>
+                    </div>
+                    {!importPreview.bitmap.length && (
+                      <div style={{ fontSize: 10, color: 'var(--md-error)' }}>Nothing but transparent pixels at this size.</div>
+                    )}
+                    <p style={{ margin: 0, fontSize: 10, color: 'var(--md-on-surface-variant)' }}>Click the canvas to place it. PNG/JPG/GIF/WebP and SVG.</p>
+                  </>
+                )}
+              </div>
+            )}
             {selectedTool === 'bar' && (
               <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ display: 'flex', gap: 4 }}>
@@ -2257,6 +2427,40 @@ const App = () => {
                 </div>
               )}
 
+              {selectedElement.type === 'image' && (
+                <div style={{ marginBottom: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {selectedElement.name && (
+                    <div style={{ fontSize: 11, color: 'var(--md-on-surface-variant)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {selectedElement.name}
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', width: 10 }}>W</span>
+                    <input
+                      type="range" min="1" max={CANVAS_WIDTH} value={selectedElement.width}
+                      onChange={(e) => {
+                        const width = parseInt(e.target.value);
+                        updateSelected({ width, bitmap: resampleBitmap(selectedElement.bitmap, selectedElement.width, selectedElement.height, width, selectedElement.height) });
+                      }}
+                      style={{ flex: 1 }}
+                    />
+                    <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', width: 28, textAlign: 'right' }}>{selectedElement.width}px</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', width: 10 }}>H</span>
+                    <input
+                      type="range" min="1" max={CANVAS_HEIGHT} value={selectedElement.height}
+                      onChange={(e) => {
+                        const height = parseInt(e.target.value);
+                        updateSelected({ height, bitmap: resampleBitmap(selectedElement.bitmap, selectedElement.width, selectedElement.height, selectedElement.width, height) });
+                      }}
+                      style={{ flex: 1 }}
+                    />
+                    <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', width: 28, textAlign: 'right' }}>{selectedElement.height}px</span>
+                  </div>
+                </div>
+              )}
+
               {selectedElement.type === 'bar' && (
                 <div style={{ marginBottom: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {selectedElement.entityId ? (
@@ -2356,10 +2560,16 @@ const App = () => {
                   el.entityId ? `@ ${el.entityId.split('.').pop().slice(0,8)}` :
                   el.type === 'text' ? `T "${el.text.slice(0,6)}"` :
                   el.type === 'icon' ? `⬡ ${el.name}` :
+                  el.type === 'image' ? `🖼 ${el.name || 'Image'}` :
                   el.type === 'bar' ? `▤ ${el.value}` :
                   el.type
                 }</span>
-                <div style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: `rgb(${el.color.r}, ${el.color.g}, ${el.color.b})` }} />
+                <div style={{
+                  width: 10, height: 10, borderRadius: 2,
+                  background: el.color
+                    ? `rgb(${el.color.r}, ${el.color.g}, ${el.color.b})`
+                    : 'linear-gradient(135deg, #f00, #0f0, #00f)',
+                }} />
               </div>
             ))}
           </div>
