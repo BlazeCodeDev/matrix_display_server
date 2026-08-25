@@ -2144,18 +2144,6 @@ const App = () => {
             )}
           </div>
 
-          <div className="m3-panel">
-            <h3 className="m3-eyebrow">Color</h3>
-            <ColorPicker
-              value={currentColor}
-              onChange={setCurrentColor}
-              presets={presetColors}
-              customColors={customColors}
-              onAddCustom={() => addCustomColor(currentColor)}
-              onRemoveCustom={removeCustomColor}
-            />
-          </div>
-
           {selectedElement && (
             <div className="m3-panel">
               <h3 className="m3-eyebrow">Selected: {selectedElement.type}</h3>
@@ -2342,6 +2330,18 @@ const App = () => {
               <button onClick={deleteSelected} className="m3-btn m3-btn-danger" style={{ width: '100%' }}><Icon name="delete" size={16} /> Delete</button>
             </div>
           )}
+
+          <div className="m3-panel">
+            <h3 className="m3-eyebrow">Color</h3>
+            <ColorPicker
+              value={currentColor}
+              onChange={setCurrentColor}
+              presets={presetColors}
+              customColors={customColors}
+              onAddCustom={() => addCustomColor(currentColor)}
+              onRemoveCustom={removeCustomColor}
+            />
+          </div>
 
           <div className="m3-panel" style={{ flex: 1, overflow: 'auto' }}>
             <h3 className="m3-eyebrow">Elements ({elements.length})</h3>
