@@ -463,6 +463,18 @@ function getElementPixels(el) {
   else if (el.type === 'text') {
     return getTextPixels(el.text, el.x, el.y, el.fontSize, color);
   }
+  else if (el.type === 'icon') {
+    // The Material Symbols glyph is rasterized in the browser (canvas + the
+    // webfont, neither available in Node) and shipped as a {row,col} bitmap
+    // at save time; this just stamps it out relative to el.x/el.y.
+    (el.bitmap || []).forEach(p => {
+      const px = el.x + p.col;
+      const py = el.y + p.row;
+      if (px >= 0 && px < 64 && py >= 0 && py < 32) {
+        pixels.push({ x: px, y: py, r: color.r, g: color.g, b: color.b });
+      }
+    });
+  }
   else if (el.type === 'line') {
     const points = getLinePoints(el.x1, el.y1, el.x2, el.y2);
     points.forEach(p => pixels.push({ x: p.x, y: p.y, r: color.r, g: color.g, b: color.b }));

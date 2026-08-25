@@ -325,6 +325,58 @@ const FONTS = {
   }
 };
 
+// A curated shortlist of Material Symbols useful on a status display; the
+// text input next to it accepts any name from fonts.google.com/icons.
+const COMMON_ICONS = [
+  'wifi', 'wifi_off', 'cloud', 'sunny', 'rainy', 'ac_unit', 'thermostat',
+  'water_drop', 'bolt', 'battery_full', 'battery_alert', 'notifications',
+  'lock', 'lock_open', 'home', 'power_settings_new', 'schedule', 'alarm',
+  'favorite', 'star', 'check_circle', 'cancel', 'warning', 'error', 'info',
+  'volume_up', 'volume_off', 'mic', 'light_mode', 'dark_mode',
+  'local_fire_department', 'air', 'speed', 'sync', 'settings', 'person',
+  'directions_car', 'ev_station', 'garage', 'videocam', 'music_note',
+];
+
+// Rendering a Material Symbols glyph straight at its final pixel size (rather
+// than drawing it large and downscaling) lets the browser's own font hinting
+// decide which pixels survive — that's what keeps icons legible down to
+// ~10-12px instead of turning into a blob. Results are cached by name+size
+// since rasterizing is a canvas draw + getImageData per glyph.
+const iconRasterCache = {};
+let iconRasterCanvas = null;
+
+function rasterizeIcon(name, size) {
+  if (!name) return [];
+  const key = name + ':' + size;
+  const cached = iconRasterCache[key];
+  if (cached) return cached;
+  // Font may not have finished loading yet (webfont swap); don't cache a
+  // blank result in that case so a later re-render can try again.
+  if (!document.fonts.check(`${size}px "Material Symbols Outlined"`)) return [];
+
+  if (!iconRasterCanvas) iconRasterCanvas = document.createElement('canvas');
+  const canvas = iconRasterCanvas;
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, size, size);
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `${size}px "Material Symbols Outlined"`;
+  ctx.fillText(name, size / 2, size / 2 + size * 0.04);
+
+  const data = ctx.getImageData(0, 0, size, size).data;
+  const points = [];
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      if (data[(y * size + x) * 4 + 3] > 90) points.push({ row: y, col: x });
+    }
+  }
+  iconRasterCache[key] = points;
+  return points;
+}
+
 const App = () => {
   // Screen management
   const [screens, setScreens] = useState([]);
@@ -357,6 +409,9 @@ const App = () => {
   const [barGradient, setBarGradient] = useState(false);
   const [barColor2, setBarColor2] = useState({ r: 0, g: 255, b: 0 });
   const [textColorRules, setTextColorRules] = useState([]);
+  const [iconName, setIconName] = useState('wifi');
+  const [iconSize, setIconSize] = useState(16);
+  const [iconFontReady, setIconFontReady] = useState(false);
   const [filled, setFilled] = useState(false);
   const [screenName, setScreenName] = useState('Untitled');
   const [dragMode, setDragMode] = useState(null);
@@ -397,6 +452,16 @@ const App = () => {
   useEffect(() => {
     fetchScreens();
     fetchSettings();
+  }, []);
+
+  // The Material Symbols webfont loads async; icon rasterization no-ops
+  // until it's ready, so re-render once it lands to pick up real glyphs.
+  useEffect(() => {
+    const sizes = [8, 10, 12, 14, 16, 20, 24, 28, 32];
+    Promise.all(sizes.map(s => document.fonts.load(`${s}px "Material Symbols Outlined"`)))
+      .then(() => document.fonts.ready)
+      .then(() => setIconFontReady(true))
+      .catch(() => setIconFontReady(true));
   }, []);
 
   const fetchSettings = async () => {
@@ -643,6 +708,7 @@ const App = () => {
     { id: 'rect', name: 'Rect', icon: 'crop_square' },
     { id: 'circle', name: 'Circle', icon: 'circle' },
     { id: 'text', name: 'Text', icon: 'text_fields' },
+    { id: 'icon', name: 'Icon', icon: 'emoji_symbols' },
     { id: 'bar', name: 'Progress Bar', icon: 'bar_chart' },
     { id: 'eraser', name: 'Eraser', icon: 'ink_eraser' },
   ];
@@ -686,6 +752,18 @@ const App = () => {
     return pixels;
   };
 
+  const getIconPixels = (name, x, y, size, color) => {
+    const points = rasterizeIcon(name, size);
+    const pixels = [];
+    for (const p of points) {
+      const px = x + p.col, py = y + p.row;
+      if (px >= 0 && px < CANVAS_WIDTH && py >= 0 && py < CANVAS_HEIGHT) {
+        pixels.push({ x: px, y: py, color });
+      }
+    }
+    return pixels;
+  };
+
   // Pick the color for the highest colorRules threshold the value meets or
   // exceeds, e.g. [{threshold:80,color:red}] recolors once value >= 80.
   const applyColorRules = (baseColor, colorRules, value) => {
@@ -709,6 +787,8 @@ const App = () => {
       pixels.push({ x: el.x, y: el.y, color: el.color });
     } else if (el.type === 'text') {
       return getTextPixels(el.text, el.x, el.y, el.fontSize, el.color);
+    } else if (el.type === 'icon') {
+      return getIconPixels(el.name, el.x, el.y, el.size, el.color);
     } else if (el.type === 'line') {
       const points = getLinePoints(el.x1, el.y1, el.x2, el.y2);
       points.forEach(p => pixels.push({ x: p.x, y: p.y, color: el.color }));
@@ -770,6 +850,7 @@ const App = () => {
       const font = FONTS[el.fontSize];
       return { x: el.x, y: el.y, width: el.text.length * (font.width + 1), height: font.height };
     }
+    if (el.type === 'icon') return { x: el.x, y: el.y, width: el.size, height: el.size };
     return { x: 0, y: 0, width: 1, height: 1 };
   };
 
@@ -780,7 +861,7 @@ const App = () => {
       if (Math.abs(pos.x - el.x1) <= 1 && Math.abs(pos.y - el.y1) <= 1) return 'line-start';
       if (Math.abs(pos.x - el.x2) <= 1 && Math.abs(pos.y - el.y2) <= 1) return 'line-end';
     }
-    if (el.type === 'rect' || el.type === 'circle' || el.type === 'bar') {
+    if (el.type === 'rect' || el.type === 'circle' || el.type === 'bar' || el.type === 'icon') {
       const { x, y, width, height } = bounds;
       if (Math.abs(pos.x - (x + width)) <= 1 && Math.abs(pos.y - (y + height)) <= 1) return 'resize-br';
       if (Math.abs(pos.x - x) <= 1 && Math.abs(pos.y - y) <= 1) return 'resize-tl';
@@ -828,6 +909,13 @@ const App = () => {
       } else {
         addElement({ type: 'text', x: pos.x, y: pos.y, text: textInput, fontSize, color: { ...currentColor } });
       }
+    } else if (selectedTool === 'icon') {
+      if (!iconFontReady) return;
+      const half = Math.floor(iconSize / 2);
+      addElement({
+        type: 'icon', x: pos.x - half, y: pos.y - half, name: iconName, size: iconSize,
+        color: { ...currentColor }, bitmap: rasterizeIcon(iconName, iconSize),
+      });
     } else if (selectedTool === 'eraser') {
       removeElementAt(pos);
     }
@@ -843,12 +931,20 @@ const App = () => {
         if (el.id !== originalElement.id) return el;
         if (dragMode === 'move') {
           if (el.type === 'pixel') return { ...el, x: originalElement.x + dx, y: originalElement.y + dy };
-          if (el.type === 'rect' || el.type === 'text' || el.type === 'bar') return { ...el, x: originalElement.x + dx, y: originalElement.y + dy };
+          if (el.type === 'rect' || el.type === 'text' || el.type === 'bar' || el.type === 'icon') return { ...el, x: originalElement.x + dx, y: originalElement.y + dy };
           if (el.type === 'circle') return { ...el, cx: originalElement.cx + dx, cy: originalElement.cy + dy };
           if (el.type === 'line') return { ...el, x1: originalElement.x1 + dx, y1: originalElement.y1 + dy, x2: originalElement.x2 + dx, y2: originalElement.y2 + dy };
         }
         if ((el.type === 'rect' || el.type === 'bar') && dragMode === 'resize-br') return { ...el, width: Math.max(1, originalElement.width + dx), height: Math.max(1, originalElement.height + dy) };
         if ((el.type === 'rect' || el.type === 'bar') && dragMode === 'resize-tl') return { ...el, x: originalElement.x + dx, y: originalElement.y + dy, width: Math.max(1, originalElement.width - dx), height: Math.max(1, originalElement.height - dy) };
+        if (el.type === 'icon' && dragMode === 'resize-br') {
+          const size = Math.max(4, originalElement.size + Math.round((dx + dy) / 2));
+          return { ...el, size, bitmap: rasterizeIcon(el.name, size) };
+        }
+        if (el.type === 'icon' && dragMode === 'resize-tl') {
+          const size = Math.max(4, originalElement.size - Math.round((dx + dy) / 2));
+          return { ...el, x: originalElement.x + dx, y: originalElement.y + dy, size, bitmap: rasterizeIcon(el.name, size) };
+        }
         if (el.type === 'circle' && dragMode.startsWith('resize')) return { ...el, r: Math.max(1, Math.round(Math.sqrt(Math.pow(pos.x - originalElement.cx, 2) + Math.pow(pos.y - originalElement.cy, 2)))) };
         if (el.type === 'line' && dragMode === 'line-start') return { ...el, x1: pos.x, y1: pos.y };
         if (el.type === 'line' && dragMode === 'line-end') return { ...el, x2: pos.x, y2: pos.y };
@@ -1174,6 +1270,49 @@ const App = () => {
                 </select>
               </div>
             )}
+            {selectedTool === 'icon' && (
+              <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <input
+                  type="text"
+                  value={iconName}
+                  onChange={(e) => setIconName(e.target.value.trim())}
+                  className="m3-input"
+                  placeholder="Icon name, e.g. wifi"
+                />
+                <a href="https://fonts.google.com/icons" target="_blank" rel="noreferrer" style={{ fontSize: 10, color: 'var(--md-on-surface-variant)' }}>
+                  Browse Material Symbols names ↗
+                </a>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{
+                    width: 40, height: 40, borderRadius: 'var(--md-shape-sm)', background: 'var(--md-surface-container-highest)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                    color: `rgb(${currentColor.r}, ${currentColor.g}, ${currentColor.b})`,
+                  }}>
+                    <Icon name={iconName || 'help'} size={Math.min(28, iconSize)} />
+                  </div>
+                  <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <input type="range" min="6" max="32" value={iconSize} onChange={(e) => setIconSize(parseInt(e.target.value))} style={{ flex: 1 }} />
+                    <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', width: 32, textAlign: 'right' }}>{iconSize}px</span>
+                  </div>
+                </div>
+                {!iconFontReady && (
+                  <div style={{ fontSize: 10, color: 'var(--md-on-surface-variant)' }}>Loading icon font…</div>
+                )}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 4 }}>
+                  {COMMON_ICONS.map(name => (
+                    <button
+                      key={name}
+                      onClick={() => setIconName(name)}
+                      title={name}
+                      className="m3-icon-btn m3-icon-btn-sm"
+                      style={name === iconName ? { background: 'var(--md-secondary-container)', color: 'var(--md-on-secondary-container)' } : undefined}
+                    >
+                      <Icon name={name} size={16} />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             {selectedTool === 'bar' && (
               <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ display: 'flex', gap: 4 }}>
@@ -1296,6 +1435,31 @@ const App = () => {
                   <input type="text" value={selectedElement.text} onChange={(e) => setElements(prev => prev.map(el => el.id === selectedElement.id ? { ...el, text: e.target.value } : el))} className="m3-input" style={{ width: '100%', marginBottom: 10 }} />
                 )
               )}
+              {selectedElement.type === 'icon' && (
+                <div style={{ marginBottom: 10 }}>
+                  <input
+                    type="text"
+                    value={selectedElement.name}
+                    onChange={(e) => {
+                      const name = e.target.value.trim();
+                      setElements(prev => prev.map(el => el.id === selectedElement.id ? { ...el, name, bitmap: rasterizeIcon(name, el.size) } : el));
+                    }}
+                    className="m3-input"
+                    style={{ width: '100%', marginBottom: 8 }}
+                  />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <input
+                      type="range" min="6" max="32" value={selectedElement.size}
+                      onChange={(e) => {
+                        const size = parseInt(e.target.value);
+                        setElements(prev => prev.map(el => el.id === selectedElement.id ? { ...el, size, bitmap: rasterizeIcon(el.name, size) } : el));
+                      }}
+                      style={{ flex: 1 }}
+                    />
+                    <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', width: 32, textAlign: 'right' }}>{selectedElement.size}px</span>
+                  </div>
+                </div>
+              )}
               {selectedElement.type === 'bar' && (
                 selectedElement.entityId ? (
                   <div className="m3-chip" style={{ marginBottom: 10, display: 'block' }}>
@@ -1324,6 +1488,7 @@ const App = () => {
                 <span>{
                   el.entityId ? `@ ${el.entityId.split('.').pop().slice(0,8)}` :
                   el.type === 'text' ? `T "${el.text.slice(0,6)}"` :
+                  el.type === 'icon' ? `⬡ ${el.name}` :
                   el.type === 'bar' ? `▤ ${el.value}` :
                   el.type
                 }</span>
