@@ -749,13 +749,30 @@ const App = () => {
   // Switching screens entirely (load/new/delete) calls resetHistory instead,
   // since jumping to unrelated content isn't something you'd want to "undo"
   // back through.
+  //
+  // A single mouse drag (painting a brush stroke, dragging a shape into
+  // place, erasing an area) fires updateFrames once per mousemove tick —
+  // without batching, undo would step back one tick at a time instead of
+  // undoing the whole stroke. beginStroke/endStroke bracket the
+  // mousedown..mouseup lifecycle so only the FIRST edit inside that window
+  // pushes a history entry; everything after it until mouseup applies to
+  // the same entry. The snapshot is taken lazily (on that first edit, not
+  // at mousedown) so a plain click that changes nothing — e.g. selecting —
+  // doesn't leave a no-op entry in the stack.
   const [history, setHistory] = useState([]);
   const [future, setFuture] = useState([]);
+  const isStrokeRef = useRef(false);
+  const strokeSnapshotTakenRef = useRef(false);
+  const beginStroke = () => { isStrokeRef.current = true; strokeSnapshotTakenRef.current = false; };
+  const endStroke = () => { isStrokeRef.current = false; strokeSnapshotTakenRef.current = false; };
   const updateFrames = (updater) => {
     const prevFrames = framesRef.current;
     const nextFrames = typeof updater === 'function' ? updater(prevFrames) : updater;
-    setHistory(h => [...h.slice(-99), prevFrames]);
-    setFuture([]);
+    if (!isStrokeRef.current || !strokeSnapshotTakenRef.current) {
+      setHistory(h => [...h.slice(-99), prevFrames]);
+      setFuture([]);
+      strokeSnapshotTakenRef.current = true;
+    }
     setFrames(nextFrames);
   };
   const resetHistory = () => { setHistory([]); setFuture([]); };
@@ -1331,6 +1348,7 @@ const App = () => {
 
   const handleMouseDown = (e) => {
     if (isPlaying) return;
+    beginStroke();
     const pos = getMousePos(e);
     setIsDrawing(true);
     setStartPos(pos);
@@ -1447,6 +1465,7 @@ const App = () => {
     setIsDrawing(false);
     setStartPos(null);
     setDragMode(null);
+    endStroke();
   };
 
   const addElement = (el) => setElements(prev => [...prev, { ...el, id: Date.now() + Math.random() }]);
