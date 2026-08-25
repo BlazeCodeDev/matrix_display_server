@@ -185,6 +185,19 @@ const CANVAS_WIDTH = 64;
 const CANVAS_HEIGHT = 32;
 const PIXEL_SIZE = 12;
 
+// HA entity states are sometimes a plain number ("21.5") but sometimes come
+// with a unit baked directly into the value itself ("42 W", "$1,234.50",
+// "73%") rather than split out into a separate unit_of_measurement
+// attribute. Pull out the numeric part regardless of where the unit sits,
+// treating a comma as a thousands separator (not a decimal point) since HA's
+// own state strings are always dot-decimal.
+function parseEntityNumber(raw) {
+  if (raw == null) return NaN;
+  const s = String(raw).trim().replace(/(\d),(?=\d{3}(\D|$))/g, '$1');
+  const match = s.match(/-?\d+(\.\d+)?/);
+  return match ? parseFloat(match[0]) : NaN;
+}
+
 const FONTS = {
   tiny: {
     height: 5, width: 3,
@@ -503,9 +516,12 @@ const App = () => {
     }
   };
 
-  // Entity search for the Text tool's "Live entity" mode (debounced)
+  // Entity search for the Text/Bar tools' "Live entity" mode (debounced).
+  // Both tools share this one query/suggestions state, so the active tool's
+  // own mode flag decides whether a search should actually run.
+  const entityPickerActive = selectedTool === 'text' ? textMode === 'entity' : selectedTool === 'bar' ? barMode === 'entity' : false;
   useEffect(() => {
-    if (textMode !== 'entity' || !entityQuery.trim()) {
+    if (!entityPickerActive || !entityQuery.trim()) {
       setEntitySuggestions([]);
       return;
     }
@@ -522,7 +538,7 @@ const App = () => {
       }
     }, 300);
     return () => clearTimeout(handle);
-  }, [entityQuery, textMode]);
+  }, [entityQuery, entityPickerActive]);
 
   const pickEntity = async (entity) => {
     setSelectedEntity(entity);
@@ -532,10 +548,10 @@ const App = () => {
       const res = await fetch(`/api/ha/state/${encodeURIComponent(entity.entityId)}`);
       const data = await res.json();
       setEntityPreviewText(res.ok ? data.text : entity.state);
-      setEntityPreviewValue(parseFloat(res.ok ? data.state : entity.state) || 0);
+      setEntityPreviewValue(parseEntityNumber(res.ok ? data.state : entity.state) || 0);
     } catch (e) {
       setEntityPreviewText(entity.state);
-      setEntityPreviewValue(parseFloat(entity.state) || 0);
+      setEntityPreviewValue(parseEntityNumber(entity.state) || 0);
     }
   };
 

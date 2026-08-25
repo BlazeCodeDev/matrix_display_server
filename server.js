@@ -93,6 +93,19 @@ async function haFetch(pathname) {
   }
 }
 
+// HA entity states are sometimes a plain number ("21.5") but sometimes come
+// with a unit baked directly into the value itself ("42 W", "$1,234.50",
+// "73%") rather than split out into a separate unit_of_measurement
+// attribute. Pull out the numeric part regardless of where the unit sits,
+// treating a comma as a thousands separator (not a decimal point) since HA's
+// own state strings are always dot-decimal.
+function parseEntityNumber(raw) {
+  if (raw == null) return NaN;
+  const s = String(raw).trim().replace(/(\d),(?=\d{3}(\D|$))/g, '$1');
+  const match = s.match(/-?\d+(\.\d+)?/);
+  return match ? parseFloat(match[0]) : NaN;
+}
+
 // Pick the color for the highest colorRules threshold the value meets or
 // exceeds, e.g. [{threshold:80,color:red}] recolors once value >= 80.
 // Falls back to the element's base color if no rule matches (or none set).
@@ -117,7 +130,7 @@ async function resolveElement(el) {
     if (!state) return { ...el, text: el.text || '?' };
     const unit = state.attributes?.unit_of_measurement;
     const text = unit ? `${state.state}${unit}` : state.state;
-    const value = parseFloat(state.state);
+    const value = parseEntityNumber(state.state);
     const color = applyColorRules(el.color, el.colorRules, value);
     return { ...el, text, color };
   }
@@ -125,7 +138,7 @@ async function resolveElement(el) {
   if (el.type === 'bar') {
     const state = await haFetch(`/api/states/${encodeURIComponent(el.entityId)}`);
     if (!state) return el; // keep last known value rather than zeroing the bar
-    const value = parseFloat(state.state);
+    const value = parseEntityNumber(state.state);
     if (Number.isNaN(value)) return el;
     return { ...el, value };
   }
