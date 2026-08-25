@@ -403,15 +403,11 @@ function getElementPixels(el) {
 // Format: JSON with pixels array and animation info
 app.get('/api/esp/pixels', (req, res) => {
   const data = loadData();
-  if (!data.activeScreenId) {
-    return res.json({ pixels: [], frameCount: 0 });
-  }
-  
-  const screen = data.screens.find(s => s.id === data.activeScreenId);
+  const screen = data.activeScreenId ? data.screens.find(s => s.id === data.activeScreenId) : null;
   if (!screen) {
-    return res.json({ pixels: [], frameCount: 0 });
+    return res.json({ id: null, name: null, isAnimated: false, frameDelay: 200, frameCount: 0, frames: [] });
   }
-  
+
   const frames = screen.frames.map(frameElements => {
     const allPixels = [];
     frameElements.forEach(el => {

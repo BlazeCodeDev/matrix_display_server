@@ -238,13 +238,23 @@ interval:
           url: !lambda |-
             std::string base = id(matrix_server_addr).state;
             while (!base.empty() && base.back() == '/') base.pop_back();
-            return base + "/api/esp/pixels";
+            std::string full_url = base + "/api/esp/pixels";
+            ESP_LOGI("md_poll", "GET %s", full_url.c_str());
+            return full_url;
           capture_response: true
           max_response_buffer_size: 80000
+          on_error:
+            then:
+              - lambda: |-
+                  ESP_LOGW("md_poll", "Request failed (unreachable / DNS / timeout). Check Matrix Server URL.");
           on_response:
             then:
               - lambda: |-
-                  if ((int)response->status_code != 200) return;
+                  int status = (int) response->status_code;
+                  if (status != 200) {
+                    ESP_LOGW("md_poll", "Server returned HTTP %d", status);
+                    return;
+                  }
                   std::string resp_body = body;
 
                   // Find "key":<int> starting at or after `from`.
@@ -269,12 +279,18 @@ interval:
                   };
 
                   size_t frames_pos = resp_body.find("\"frames\":");
-                  if (frames_pos == std::string::npos) return;
+                  if (frames_pos == std::string::npos) {
+                    ESP_LOGW("md_poll", "Response has no \"frames\" key (len=%d)", (int) resp_body.length());
+                    return;
+                  }
 
                   size_t outer_start = resp_body.find('[', frames_pos);
                   if (outer_start == std::string::npos) return;
                   size_t frame_start = resp_body.find('[', outer_start + 1);
-                  if (frame_start == std::string::npos) return;
+                  if (frame_start == std::string::npos) {
+                    ESP_LOGI("md_poll", "No active screen (frames is empty)");
+                    return;
+                  }
 
                   // Find the matching close bracket for the first frame's pixel array.
                   int depth = 0;
@@ -291,6 +307,7 @@ interval:
                   for (int i = 0; i < 6144; i++) id(md_framebuffer)[i] = 0;
 
                   size_t pos = frame_start;
+                  int applied = 0;
                   while (true) {
                     size_t obj_start = resp_body.find('{', pos);
                     if (obj_start == std::string::npos || obj_start > frame_end) break;
@@ -309,11 +326,13 @@ interval:
                       id(md_framebuffer)[i] = (uint8_t) r;
                       id(md_framebuffer)[i + 1] = (uint8_t) g;
                       id(md_framebuffer)[i + 2] = (uint8_t) b;
+                      applied++;
                     }
 
                     pos = obj_end + 1;
                   }
 
+                  ESP_LOGI("md_poll", "Applied %d pixels", applied);
                   id(md_has_design) = true;
 
 font:
