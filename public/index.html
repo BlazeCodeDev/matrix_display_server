@@ -687,6 +687,12 @@ const App = () => {
   const [iconSize, setIconSize] = useState(16);
   const [iconFontReady, setIconFontReady] = useState(false);
   const [filled, setFilled] = useState(false);
+  // A second, independent entity search for the "Selected" edit panel — kept
+  // separate from the Text/Bar tools' own entityQuery so re-binding an
+  // existing element can't collide with a search already in progress for a
+  // brand-new one.
+  const [editEntityQuery, setEditEntityQuery] = useState('');
+  const [editEntitySuggestions, setEditEntitySuggestions] = useState([]);
   const [screenName, setScreenName] = useState('Untitled');
   const [dragMode, setDragMode] = useState(null);
   const [dragStart, setDragStart] = useState(null);
@@ -850,6 +856,89 @@ const App = () => {
       setEntityPreviewValue(parseEntityNumber(entity.state) || 0);
     }
   };
+
+  // Entity search for re-binding an already-placed text/bar element from the
+  // "Selected" panel. Clears whenever the selection changes so a stale
+  // in-progress search doesn't linger onto the next element.
+  useEffect(() => {
+    setEditEntityQuery('');
+    setEditEntitySuggestions([]);
+  }, [selectedElement?.id]);
+
+  useEffect(() => {
+    if (!editEntityQuery.trim()) { setEditEntitySuggestions([]); return; }
+    const handle = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/ha/entities?q=${encodeURIComponent(editEntityQuery)}`);
+        const data = await res.json();
+        setEditEntitySuggestions(res.ok ? (data.entities || []) : []);
+      } catch (e) {
+        setEditEntitySuggestions([]);
+      }
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [editEntityQuery]);
+
+  const updateSelected = (patch) => setElements(prev => prev.map(el => {
+    if (el.id !== selectedElement.id) return el;
+    return { ...el, ...(typeof patch === 'function' ? patch(el) : patch) };
+  }));
+
+  const rebindSelectedEntity = async (entity) => {
+    try {
+      const res = await fetch(`/api/ha/state/${encodeURIComponent(entity.entityId)}`);
+      const data = await res.json();
+      if (selectedElement.type === 'text') {
+        updateSelected({ entityId: entity.entityId, text: res.ok ? data.text : entity.state });
+      } else if (selectedElement.type === 'bar') {
+        updateSelected({ entityId: entity.entityId, value: parseEntityNumber(res.ok ? data.state : entity.state) || 0 });
+      }
+    } catch (e) {}
+    setEditEntityQuery('');
+    setEditEntitySuggestions([]);
+  };
+
+  // updateSelected merges its patch onto the existing element (`{...el,
+  // ...patch}`), so clearing a field means overriding it to undefined here
+  // rather than destructuring it away — an omitted key wouldn't erase
+  // whatever the spread of `el` already put there.
+  const detachSelectedEntity = () => updateSelected(el => ({
+    entityId: undefined,
+    colorRules: undefined,
+    ...(el.type === 'text' ? { text: el.text || 'Text' } : {}),
+  }));
+
+  const addSelectedColorRule = () => updateSelected(el => ({ colorRules: [...(el.colorRules || []), { threshold: 80, color: { r: 255, g: 0, b: 0 } }] }));
+  const updateSelectedColorRule = (i, patch) => updateSelected(el => ({ colorRules: el.colorRules.map((r, idx) => idx === i ? { ...r, ...patch } : r) }));
+  const removeSelectedColorRule = (i) => updateSelected(el => ({ colorRules: el.colorRules.filter((_, idx) => idx !== i) }));
+
+  const renderEditEntitySearch = () => (
+    <div style={{ position: 'relative' }}>
+      <input
+        type="text"
+        value={editEntityQuery}
+        onChange={(e) => setEditEntityQuery(e.target.value)}
+        className="m3-input"
+        style={{ width: '100%' }}
+        placeholder="Search HA entities…"
+      />
+      {!haHasToken && (
+        <div style={{ fontSize: 10, color: 'var(--md-error)', marginTop: 4 }}>
+          Set up Home Assistant in Settings first.
+        </div>
+      )}
+      {editEntitySuggestions.length > 0 && (
+        <div style={{ marginTop: 4, maxHeight: 160, overflowY: 'auto', background: 'var(--md-surface-container-highest)', borderRadius: 'var(--md-shape-sm)' }}>
+          {editEntitySuggestions.map(en => (
+            <div key={en.entityId} onClick={() => rebindSelectedEntity(en)} style={{ padding: '6px 8px', cursor: 'pointer', fontSize: 11 }} className="m3-list-item">
+              <div style={{ color: 'var(--md-on-surface)' }}>{en.name}</div>
+              <div style={{ color: 'var(--md-on-surface-variant)', fontSize: 10 }}>{en.entityId} — {en.state}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 
   const fetchYaml = async () => {
     setShowYaml(true);
@@ -1752,22 +1841,62 @@ const App = () => {
           {selectedElement && (
             <div className="m3-panel">
               <h3 className="m3-eyebrow">Selected: {selectedElement.type}</h3>
-              {selectedElement.type === 'text' && (
-                selectedElement.entityId ? (
-                  <div style={{ marginBottom: 10 }}>
-                    <div className="m3-chip" style={{ display: 'block' }}>
-                      {selectedElement.entityId} (live — updates on device)
-                    </div>
-                    {selectedElement.colorRules?.length > 0 && (
-                      <p style={{ margin: '6px 0 0', fontSize: 10, color: 'var(--md-on-surface-variant)' }}>
-                        {selectedElement.colorRules.length} color rule{selectedElement.colorRules.length > 1 ? 's' : ''} set — edit via the Text tool panel.
-                      </p>
-                    )}
+
+              {(selectedElement.type === 'rect' || selectedElement.type === 'circle') && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 12, color: 'var(--md-on-surface-variant)', cursor: 'pointer' }}>
+                  <div className={`m3-switch${selectedElement.filled ? ' on' : ''}`} onClick={() => updateSelected({ filled: !selectedElement.filled })} style={{ width: 36, height: 22 }}>
+                    <div className="thumb" style={{ width: selectedElement.filled ? 14 : 10, height: selectedElement.filled ? 14 : 10, left: selectedElement.filled ? 17 : 5 }} />
                   </div>
-                ) : (
-                  <input type="text" value={selectedElement.text} onChange={(e) => setElements(prev => prev.map(el => el.id === selectedElement.id ? { ...el, text: e.target.value } : el))} className="m3-input" style={{ width: '100%', marginBottom: 10 }} />
-                )
+                  Filled
+                </label>
               )}
+
+              {selectedElement.type === 'text' && (
+                <div style={{ marginBottom: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {selectedElement.entityId ? (
+                    <>
+                      <div className="m3-chip" style={{ display: 'block' }}>
+                        {selectedElement.entityId} → "{selectedElement.text}" (live)
+                      </div>
+                      <button className="m3-btn m3-btn-outlined m3-btn-sm" onClick={detachSelectedEntity}>
+                        <Icon name="link_off" size={14} /> Detach — make static
+                      </button>
+                    </>
+                  ) : (
+                    <input type="text" value={selectedElement.text} onChange={(e) => updateSelected({ text: e.target.value })} className="m3-input" style={{ width: '100%' }} />
+                  )}
+
+                  <select value={selectedElement.fontSize} onChange={(e) => updateSelected({ fontSize: e.target.value })} className="m3-input">
+                    <option value="tiny">Tiny (3×5)</option>
+                    <option value="small">Small (5×7)</option>
+                    <option value="large">Large (7×10)</option>
+                  </select>
+
+                  <div>
+                    <label className="m3-field-label" style={{ marginBottom: 4 }}>{selectedElement.entityId ? 'Re-bind entity' : 'Bind to live entity'}</label>
+                    {renderEditEntitySearch()}
+                  </div>
+
+                  {selectedElement.entityId && (
+                    <div>
+                      <label className="m3-field-label" style={{ marginBottom: 4 }}>Color Rules</label>
+                      {(selectedElement.colorRules || []).map((rule, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                          <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)' }}>≥</span>
+                          <input type="number" value={rule.threshold} onChange={(e) => updateSelectedColorRule(i, { threshold: parseFloat(e.target.value) || 0 })} className="m3-input" style={{ width: 56, height: 28 }} />
+                          <input type="color" value={rgbToHex(rule.color)} onChange={(e) => updateSelectedColorRule(i, { color: hexToRgb(e.target.value) })} style={{ width: 28, height: 28, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }} />
+                          <button className="m3-icon-btn m3-icon-btn-sm" onClick={() => removeSelectedColorRule(i)}><Icon name="close" size={14} /></button>
+                        </div>
+                      ))}
+                      <button className="m3-btn m3-btn-outlined m3-btn-sm" onClick={addSelectedColorRule}><Icon name="add" size={14} /> Add Rule</button>
+                      {selectedElement.colorRules?.length > 0 && (
+                        <p style={{ margin: '4px 0 0', fontSize: 10, color: 'var(--md-on-surface-variant)' }}>Highest threshold met wins; base color used below all thresholds.</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {selectedElement.type === 'icon' && (
                 <div style={{ marginBottom: 10 }}>
                   <input
@@ -1775,7 +1904,7 @@ const App = () => {
                     value={selectedElement.name}
                     onChange={(e) => {
                       const name = e.target.value.trim();
-                      setElements(prev => prev.map(el => el.id === selectedElement.id ? { ...el, name, bitmap: rasterizeIcon(name, el.size) } : el));
+                      updateSelected({ name, bitmap: rasterizeIcon(name, selectedElement.size) });
                     }}
                     className="m3-input"
                     style={{ width: '100%', marginBottom: 8 }}
@@ -1785,7 +1914,7 @@ const App = () => {
                       type="range" min="6" max="32" value={selectedElement.size}
                       onChange={(e) => {
                         const size = parseInt(e.target.value);
-                        setElements(prev => prev.map(el => el.id === selectedElement.id ? { ...el, size, bitmap: rasterizeIcon(el.name, size) } : el));
+                        updateSelected({ size, bitmap: rasterizeIcon(selectedElement.name, size) });
                       }}
                       style={{ flex: 1 }}
                     />
@@ -1800,18 +1929,77 @@ const App = () => {
                   )}
                 </div>
               )}
+
               {selectedElement.type === 'bar' && (
-                selectedElement.entityId ? (
-                  <div className="m3-chip" style={{ marginBottom: 10, display: 'block' }}>
-                    {selectedElement.entityId} ({selectedElement.min}–{selectedElement.max}, live)
+                <div style={{ marginBottom: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {selectedElement.entityId ? (
+                    <>
+                      <div className="m3-chip" style={{ display: 'block' }}>
+                        {selectedElement.entityId} = {selectedElement.value} (live)
+                      </div>
+                      <button className="m3-btn m3-btn-outlined m3-btn-sm" onClick={detachSelectedEntity}>
+                        <Icon name="link_off" size={14} /> Detach — make static
+                      </button>
+                    </>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input type="range" min="0" max="100" value={selectedElement.value} onChange={(e) => updateSelected({ value: parseInt(e.target.value) })} style={{ flex: 1 }} />
+                      <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', width: 28, textAlign: 'right' }}>{selectedElement.value}</span>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <div style={{ flex: 1 }}>
+                      <label className="m3-field-label" style={{ marginBottom: 2 }}>Min</label>
+                      <input type="number" value={selectedElement.min} onChange={(e) => updateSelected({ min: parseFloat(e.target.value) || 0 })} className="m3-input" style={{ width: '100%', height: 32 }} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label className="m3-field-label" style={{ marginBottom: 2 }}>Max</label>
+                      <input type="number" value={selectedElement.max} onChange={(e) => updateSelected({ max: parseFloat(e.target.value) || 100 })} className="m3-input" style={{ width: '100%', height: 32 }} />
+                    </div>
                   </div>
-                ) : (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                    <input type="range" min="0" max="100" value={selectedElement.value} onChange={(e) => setElements(prev => prev.map(el => el.id === selectedElement.id ? { ...el, value: parseInt(e.target.value) } : el))} style={{ flex: 1 }} />
-                    <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', width: 28, textAlign: 'right' }}>{selectedElement.value}</span>
+
+                  <div>
+                    <label className="m3-field-label" style={{ marginBottom: 4 }}>{selectedElement.entityId ? 'Re-bind entity' : 'Bind to live entity'}</label>
+                    {renderEditEntitySearch()}
                   </div>
-                )
+
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--md-on-surface-variant)', cursor: 'pointer' }}>
+                    <div className={`m3-switch${selectedElement.color2 ? ' on' : ''}`} onClick={() => updateSelected({ color2: selectedElement.color2 ? null : { r: 0, g: 255, b: 0 } })} style={{ width: 36, height: 22 }}>
+                      <div className="thumb" style={{ width: selectedElement.color2 ? 14 : 10, height: selectedElement.color2 ? 14 : 10, left: selectedElement.color2 ? 17 : 5 }} />
+                    </div>
+                    Multicolor gradient
+                  </label>
+                  {selectedElement.color2 && (
+                    <div>
+                      <label className="m3-field-label" style={{ marginBottom: 4 }}>End Color</label>
+                      <ColorPicker
+                        value={selectedElement.color2}
+                        onChange={(c) => updateSelected({ color2: c })}
+                        presets={presetColors}
+                        customColors={customColors}
+                        onAddCustom={() => addCustomColor(selectedElement.color2)}
+                        onRemoveCustom={removeCustomColor}
+                      />
+                    </div>
+                  )}
+                </div>
               )}
+
+              {selectedElement.color && (
+                <div style={{ marginBottom: 10 }}>
+                  <label className="m3-field-label" style={{ marginBottom: 4 }}>{selectedElement.type === 'bar' ? 'Start Color' : 'Color'}</label>
+                  <ColorPicker
+                    value={selectedElement.color}
+                    onChange={(c) => updateSelected({ color: c })}
+                    presets={presetColors}
+                    customColors={customColors}
+                    onAddCustom={() => addCustomColor(selectedElement.color)}
+                    onRemoveCustom={removeCustomColor}
+                  />
+                </div>
+              )}
+
               <button onClick={deleteSelected} className="m3-btn m3-btn-danger" style={{ width: '100%' }}><Icon name="delete" size={16} /> Delete</button>
             </div>
           )}
