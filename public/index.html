@@ -448,6 +448,20 @@ function rasterizeIcon(name, size) {
 const rgbToHex = (c) => '#' + [c.r, c.g, c.b].map(v => v.toString(16).padStart(2, '0')).join('');
 const hexToRgb = (hex) => ({ r: parseInt(hex.slice(1, 3), 16), g: parseInt(hex.slice(3, 5), 16), b: parseInt(hex.slice(5, 7), 16) });
 
+// A size-N brush stamp as offsets from the cursor cell. Odd sizes center
+// exactly on the cursor; even sizes bias slightly right/down (there's no
+// single center cell) — the same convention most pixel editors use.
+function getBrushOffsets(size) {
+  const half = Math.floor((size - 1) / 2);
+  const offsets = [];
+  for (let dy = -half; dy < size - half; dy++) {
+    for (let dx = -half; dx < size - half; dx++) {
+      offsets.push({ dx, dy });
+    }
+  }
+  return offsets;
+}
+
 function rgbToHsv(r, g, b) {
   r /= 255; g /= 255; b /= 255;
   const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
@@ -690,6 +704,8 @@ const App = () => {
   const [iconSize, setIconSize] = useState(16);
   const [iconFontReady, setIconFontReady] = useState(false);
   const [filled, setFilled] = useState(false);
+  const [brushSize, setBrushSize] = useState(1);
+  const [eraserSize, setEraserSize] = useState(1);
   // A second, independent entity search for the "Selected" edit panel — kept
   // separate from the Text/Bar tools' own entityQuery so re-binding an
   // existing element can't collide with a search already in progress for a
@@ -1339,7 +1355,7 @@ const App = () => {
         setSelectedElement(null);
       }
     } else if (selectedTool === 'pixel') {
-      addElement({ type: 'pixel', x: pos.x, y: pos.y, color: { ...currentColor } });
+      paintBrush(pos, brushSize, currentColor);
     } else if (selectedTool === 'text') {
       const maxWidth = textMaxWidthEnabled ? textMaxWidth : undefined;
       if (textMode === 'entity' && selectedEntity) {
@@ -1364,7 +1380,7 @@ const App = () => {
         color: { ...currentColor }, bitmap,
       });
     } else if (selectedTool === 'eraser') {
-      removeElementAt(pos);
+      removeElementsInArea(pos, eraserSize);
     }
   };
 
@@ -1398,9 +1414,7 @@ const App = () => {
         return el;
       }));
     } else if (selectedTool === 'pixel') {
-      if (!elements.find(el => el.type === 'pixel' && el.x === pos.x && el.y === pos.y)) {
-        addElement({ type: 'pixel', x: pos.x, y: pos.y, color: { ...currentColor } });
-      }
+      paintBrush(pos, brushSize, currentColor);
     } else if (selectedTool === 'line') {
       setPreviewElement({ type: 'line', x1: startPos.x, y1: startPos.y, x2: pos.x, y2: pos.y, color: { ...currentColor } });
     } else if (selectedTool === 'rect') {
@@ -1424,7 +1438,7 @@ const App = () => {
       }
       setPreviewElement(barEl);
     } else if (selectedTool === 'eraser') {
-      removeElementAt(pos);
+      removeElementsInArea(pos, eraserSize);
     }
   };
 
@@ -1436,7 +1450,39 @@ const App = () => {
   };
 
   const addElement = (el) => setElements(prev => [...prev, { ...el, id: Date.now() + Math.random() }]);
-  const removeElementAt = (pos) => setElements(prev => prev.filter(el => !isInsideElement(pos, el)));
+  const addElements = (els) => setElements(prev => [...prev, ...els.map((el, i) => ({ ...el, id: Date.now() + Math.random() + i }))]);
+
+  // Stamps a size×size block of pixel elements centered on `center` in one
+  // history step (rather than one addElement call per cell, which would
+  // spam the undo stack while dragging). Skips cells that already have a
+  // pixel there so redundant strokes over the same spot don't pile up
+  // duplicate elements.
+  const paintBrush = (center, size, color) => {
+    const offsets = getBrushOffsets(size);
+    const existing = new Set(elements.filter(el => el.type === 'pixel').map(el => `${el.x},${el.y}`));
+    const toAdd = [];
+    for (const { dx, dy } of offsets) {
+      const x = center.x + dx, y = center.y + dy;
+      if (x < 0 || x >= CANVAS_WIDTH || y < 0 || y >= CANVAS_HEIGHT) continue;
+      const key = `${x},${y}`;
+      if (existing.has(key)) continue;
+      existing.add(key);
+      toAdd.push({ type: 'pixel', x, y, color: { ...color } });
+    }
+    if (toAdd.length) addElements(toAdd);
+  };
+
+  // Eraser tool's counterpart: removes any element touching any cell in the
+  // size×size area, matching the existing single-cell eraser's "delete the
+  // whole element it hit" behavior for shapes/text/etc, just with more reach.
+  const removeElementsInArea = (pos, size) => {
+    const cellKeys = new Set();
+    for (const { dx, dy } of getBrushOffsets(size)) {
+      const x = pos.x + dx, y = pos.y + dy;
+      if (x >= 0 && x < CANVAS_WIDTH && y >= 0 && y < CANVAS_HEIGHT) cellKeys.add(`${x},${y}`);
+    }
+    setElements(prev => prev.filter(el => !getElementPixels(el).some(p => cellKeys.has(`${p.x},${p.y}`))));
+  };
   const deleteSelected = () => { if (selectedElement) { setElements(prev => prev.filter(el => el.id !== selectedElement.id)); setSelectedElement(null); } };
 
   const getLinePoints = (x1, y1, x2, y2) => {
@@ -1708,6 +1754,20 @@ const App = () => {
                 </div>
                 Filled
               </label>
+            )}
+            {selectedTool === 'pixel' && (
+              <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 12, color: 'var(--md-on-surface-variant)' }}>Brush size</span>
+                <input type="range" min="1" max="8" value={brushSize} onChange={(e) => setBrushSize(parseInt(e.target.value))} style={{ flex: 1 }} />
+                <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', width: 16, textAlign: 'right' }}>{brushSize}</span>
+              </div>
+            )}
+            {selectedTool === 'eraser' && (
+              <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 12, color: 'var(--md-on-surface-variant)' }}>Eraser size</span>
+                <input type="range" min="1" max="8" value={eraserSize} onChange={(e) => setEraserSize(parseInt(e.target.value))} style={{ flex: 1 }} />
+                <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', width: 16, textAlign: 'right' }}>{eraserSize}</span>
+              </div>
             )}
             {selectedTool === 'text' && (
               <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
