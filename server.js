@@ -550,6 +550,21 @@ function getElementPixels(el) {
   return pixels;
 }
 
+// Elements are drawn bottom-to-top and opaque, so a pixel fully covered by
+// something stacked above it is never actually visible on the device. The
+// naive per-element concat sent every layer's pixels regardless — for a
+// full-screen background rect under text/icons that's 2000+ redundant
+// entries the ESP32 has no use for. Flattening to one entry per (x,y) here
+// (later element wins, matching draw order) culls those before they ever
+// hit the wire, cutting payload size and pointless overdraw on the device.
+function compositeFramePixels(elements) {
+  const map = new Map();
+  for (const el of elements) {
+    for (const p of getElementPixels(el)) map.set(p.y * 64 + p.x, p);
+  }
+  return [...map.values()];
+}
+
 // ESP32 endpoint - returns compact pixel data for current screen
 // Format: JSON with pixels array and animation info
 app.get('/api/esp/pixels', async (req, res) => {
@@ -561,11 +576,7 @@ app.get('/api/esp/pixels', async (req, res) => {
 
   const frames = await Promise.all(screen.frames.map(async frameElements => {
     const resolved = await resolveFrameElements(frameElements);
-    const allPixels = [];
-    resolved.forEach(el => {
-      allPixels.push(...getElementPixels(el));
-    });
-    return allPixels;
+    return compositeFramePixels(resolved);
   }));
 
   res.json({
@@ -593,11 +604,7 @@ app.get('/api/esp/binary', async (req, res) => {
 
   const frames = await Promise.all(screen.frames.map(async frameElements => {
     const resolved = await resolveFrameElements(frameElements);
-    const allPixels = [];
-    resolved.forEach(el => {
-      allPixels.push(...getElementPixels(el));
-    });
-    return allPixels;
+    return compositeFramePixels(resolved);
   }));
 
   // Calculate buffer size

@@ -1415,23 +1415,33 @@ const App = () => {
 
   const renderElement = (el, isPreview = false) => {
     const pixels = getElementPixels(el);
-    const isSelected = selectedElement?.id === el.id;
     return (
-      <React.Fragment key={el.id || 'preview'}>
+      <React.Fragment key="preview">
         {pixels.map((p, i) => (
-          <div key={`${el.id}-${i}`} style={{
+          <div key={`preview-${i}`} style={{
             position: 'absolute', left: p.x * PIXEL_SIZE, top: p.y * PIXEL_SIZE,
             width: PIXEL_SIZE - 1, height: PIXEL_SIZE - 1, borderRadius: 2,
             backgroundColor: `rgba(${p.color.r}, ${p.color.g}, ${p.color.b}, ${isPreview ? 0.6 : 1})`,
             boxShadow: `0 0 ${PIXEL_SIZE/2}px rgba(${p.color.r}, ${p.color.g}, ${p.color.b}, 0.5)`,
           }} />
         ))}
-        {isSelected && !isPlaying && (() => {
-          const b = getElementBounds(el);
-          return <div style={{ position: 'absolute', left: b.x * PIXEL_SIZE - 2, top: b.y * PIXEL_SIZE - 2, width: b.width * PIXEL_SIZE + 4, height: b.height * PIXEL_SIZE + 4, border: '2px dashed #00ffff', pointerEvents: 'none' }} />;
-        })()}
       </React.Fragment>
     );
+  };
+
+  // Elements are drawn bottom-to-top and painted opaque, so a pixel fully
+  // covered by something above it is never actually visible — flattening
+  // to "last writer per (x,y) wins" before rendering culls those hidden
+  // pixels instead of stacking a translucent glow-shadowed div per element
+  // on top of each other, which is what made overlaps look muddy/bled
+  // together. Same "topmost wins" order the ESP32 already ends up with by
+  // drawing the raw per-element list in sequence, just computed once here.
+  const compositeFramePixels = (elementsList) => {
+    const map = new Map();
+    for (const el of elementsList) {
+      for (const p of getElementPixels(el)) map.set(p.y * CANVAS_WIDTH + p.x, p);
+    }
+    return [...map.values()];
   };
 
   const addFrame = () => { updateFrames(prev => [...prev, []]); setCurrentFrame(frames.length); setIsAnimated(true); };
@@ -1558,8 +1568,19 @@ const App = () => {
                   {Array.from({ length: CANVAS_WIDTH + 1 }).map((_, i) => <line key={`v${i}`} x1={i * PIXEL_SIZE} y1={0} x2={i * PIXEL_SIZE} y2={CANVAS_HEIGHT * PIXEL_SIZE} stroke="#1a1a3a" strokeWidth={0.5} />)}
                   {Array.from({ length: CANVAS_HEIGHT + 1 }).map((_, i) => <line key={`h${i}`} x1={0} y1={i * PIXEL_SIZE} x2={CANVAS_WIDTH * PIXEL_SIZE} y2={i * PIXEL_SIZE} stroke="#1a1a3a" strokeWidth={0.5} />)}
                 </svg>
-                {elements.map(el => renderElement(el))}
+                {compositeFramePixels(elements).map((p) => (
+                  <div key={`px-${p.x}-${p.y}`} style={{
+                    position: 'absolute', left: p.x * PIXEL_SIZE, top: p.y * PIXEL_SIZE,
+                    width: PIXEL_SIZE - 1, height: PIXEL_SIZE - 1, borderRadius: 2,
+                    backgroundColor: `rgb(${p.color.r}, ${p.color.g}, ${p.color.b})`,
+                    boxShadow: `0 0 ${PIXEL_SIZE / 2}px rgba(${p.color.r}, ${p.color.g}, ${p.color.b}, 0.5)`,
+                  }} />
+                ))}
                 {previewElement && renderElement(previewElement, true)}
+                {selectedElement && !isPlaying && (() => {
+                  const b = getElementBounds(selectedElement);
+                  return <div style={{ position: 'absolute', left: b.x * PIXEL_SIZE - 2, top: b.y * PIXEL_SIZE - 2, width: b.width * PIXEL_SIZE + 4, height: b.height * PIXEL_SIZE + 4, border: '2px dashed #00ffff', pointerEvents: 'none' }} />;
+                })()}
               </div>
             </div>
           </div>
