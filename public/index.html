@@ -340,14 +340,24 @@ const FONTS = {
 
 // A curated shortlist of Material Symbols useful on a status display; the
 // text input next to it accepts any name from fonts.google.com/icons.
+// Vetted at 16px against the actual webfont (some Material Symbols glyphs
+// are too fine-detailed to survive rasterizing that small and turn into an
+// unrecognizable blob even though the name itself is perfectly valid):
+// - 'battery_full'/'battery_std' collapse into a plain filled rectangle with
+//   no visible terminal cap, so 'battery_6_bar' is used instead — it keeps
+//   the cap notch that actually reads as "battery" at low res.
+// - 'sync' breaks into two disconnected bracket shapes at every size up to
+//   32px; 'refresh' (single arrow) survives down to ~16px.
+// - 'ev_station' turns into illegible clutter; dropped rather than swapped
+//   since 'bolt' already covers the power/electricity idea cleanly.
 const COMMON_ICONS = [
   'wifi', 'wifi_off', 'cloud', 'sunny', 'rainy', 'ac_unit', 'thermostat',
-  'water_drop', 'bolt', 'battery_full', 'battery_alert', 'notifications',
+  'water_drop', 'bolt', 'battery_6_bar', 'battery_alert', 'notifications',
   'lock', 'lock_open', 'home', 'power_settings_new', 'schedule', 'alarm',
   'favorite', 'star', 'check_circle', 'cancel', 'warning', 'error', 'info',
   'volume_up', 'volume_off', 'mic', 'light_mode', 'dark_mode',
-  'local_fire_department', 'air', 'speed', 'sync', 'settings', 'person',
-  'directions_car', 'ev_station', 'garage', 'videocam', 'music_note',
+  'local_fire_department', 'air', 'speed', 'refresh', 'settings', 'person',
+  'directions_car', 'garage', 'videocam', 'music_note',
   'memory', 'hard_drive', 'lan', 'dns', 'router',
 ];
 
