@@ -201,6 +201,7 @@ const Icon = ({ name, size }) => (
 const CANVAS_WIDTH = 64;
 const CANVAS_HEIGHT = 32;
 const PIXEL_SIZE = 12;
+const TEXT_SCROLL_SPEED = 6; // cells/second — must match server.js's copy
 
 // HA entity states are sometimes a plain number ("21.5") but sometimes come
 // with a unit baked directly into the value itself ("42 W", "$1,234.50",
@@ -670,6 +671,8 @@ const App = () => {
   const [textInput, setTextInput] = useState('Hello');
   const [fontSize, setFontSize] = useState('small');
   const [textMode, setTextMode] = useState('static');
+  const [textMaxWidthEnabled, setTextMaxWidthEnabled] = useState(false);
+  const [textMaxWidth, setTextMaxWidth] = useState(20);
   const [entityQuery, setEntityQuery] = useState('');
   const [entitySuggestions, setEntitySuggestions] = useState([]);
   const [entitySearching, setEntitySearching] = useState(false);
@@ -1110,6 +1113,22 @@ const App = () => {
     return () => clearInterval(interval);
   }, [isPlaying, frameDelay]);
 
+  // Re-render on a tick so bounded text actually marquees in the preview —
+  // getTextPixels reads Date.now() fresh every call, this just forces those
+  // calls to happen periodically. Only runs while something on the current
+  // frame actually needs it, so idle screens don't burn cycles.
+  const hasScrollingText = elements.some(el => {
+    if (el.type !== 'text' || !el.maxWidth) return false;
+    const font = FONTS[el.fontSize] || FONTS.small;
+    return el.text.length * (font.width + 1) > el.maxWidth;
+  });
+  const [, setScrollTick] = useState(0);
+  useEffect(() => {
+    if (!hasScrollingText) return;
+    const interval = setInterval(() => setScrollTick(t => t + 1), 150);
+    return () => clearInterval(interval);
+  }, [hasScrollingText]);
+
   const tools = [
     { id: 'select', name: 'Select', icon: 'arrow_selector_tool' },
     { id: 'pixel', name: 'Pixel', icon: 'brush' },
@@ -1137,17 +1156,32 @@ const App = () => {
     };
   };
 
-  const getTextPixels = (text, x, y, fontName, color) => {
+  // Text wider than maxWidth marquees across that window instead of running
+  // off the canvas. Driven by wall-clock time (not element age or React
+  // state) so the browser preview and the server's exported snapshot always
+  // agree on where the scroll currently is, and so multiple polls from the
+  // ESP32 (or multiple browser tabs) see a consistent, moving position
+  // rather than each restarting its own animation from zero.
+  const getTextPixels = (text, x, y, fontName, color, maxWidth) => {
     const font = FONTS[fontName] || FONTS.small;
     const pixels = [];
-    let cursorX = x;
-    for (const char of text.toUpperCase()) {
+    const upper = text.toUpperCase();
+    const textWidth = upper.length * (font.width + 1);
+    const scrolling = !!maxWidth && textWidth > maxWidth;
+    const shift = scrolling
+      ? maxWidth - Math.floor((Date.now() / 1000 * TEXT_SCROLL_SPEED) % (maxWidth + textWidth))
+      : 0;
+
+    let cursorX = 0;
+    for (const char of upper) {
       const charData = font.chars[char] || font.chars[' '];
       if (charData) {
         for (let row = 0; row < font.height; row++) {
           for (let col = 0; col < font.width; col++) {
             if ((charData[row] >> (font.width - 1 - col)) & 1) {
-              const px = cursorX + col;
+              const windowLocalX = cursorX + col + shift;
+              if (maxWidth && (windowLocalX < 0 || windowLocalX >= maxWidth)) continue;
+              const px = x + windowLocalX;
               const py = y + row;
               if (px >= 0 && px < CANVAS_WIDTH && py >= 0 && py < CANVAS_HEIGHT) {
                 pixels.push({ x: px, y: py, color });
@@ -1193,7 +1227,7 @@ const App = () => {
     if (el.type === 'pixel') {
       pixels.push({ x: el.x, y: el.y, color: el.color });
     } else if (el.type === 'text') {
-      return getTextPixels(el.text, el.x, el.y, el.fontSize, el.color);
+      return getTextPixels(el.text, el.x, el.y, el.fontSize, el.color, el.maxWidth);
     } else if (el.type === 'icon') {
       return getIconPixels(el.name, el.x, el.y, el.size, el.color);
     } else if (el.type === 'line') {
@@ -1255,7 +1289,8 @@ const App = () => {
     if (el.type === 'line') return { x: Math.min(el.x1, el.x2), y: Math.min(el.y1, el.y2), width: Math.abs(el.x2 - el.x1) + 1, height: Math.abs(el.y2 - el.y1) + 1 };
     if (el.type === 'text') {
       const font = FONTS[el.fontSize];
-      return { x: el.x, y: el.y, width: el.text.length * (font.width + 1), height: font.height };
+      const naturalWidth = el.text.length * (font.width + 1);
+      return { x: el.x, y: el.y, width: el.maxWidth || naturalWidth, height: font.height };
     }
     if (el.type === 'icon') return { x: el.x, y: el.y, width: el.size, height: el.size };
     return { x: 0, y: 0, width: 1, height: 1 };
@@ -1306,15 +1341,16 @@ const App = () => {
     } else if (selectedTool === 'pixel') {
       addElement({ type: 'pixel', x: pos.x, y: pos.y, color: { ...currentColor } });
     } else if (selectedTool === 'text') {
+      const maxWidth = textMaxWidthEnabled ? textMaxWidth : undefined;
       if (textMode === 'entity' && selectedEntity) {
         addElement({
-          type: 'text', x: pos.x, y: pos.y, text: entityPreviewText || selectedEntity.state, fontSize,
+          type: 'text', x: pos.x, y: pos.y, text: entityPreviewText || selectedEntity.state, fontSize, maxWidth,
           color: applyColorRules(currentColor, textColorRules, entityPreviewValue),
           entityId: selectedEntity.entityId,
           colorRules: textColorRules.length ? textColorRules : undefined,
         });
       } else {
-        addElement({ type: 'text', x: pos.x, y: pos.y, text: textInput, fontSize, color: { ...currentColor } });
+        addElement({ type: 'text', x: pos.x, y: pos.y, text: textInput, fontSize, maxWidth, color: { ...currentColor } });
       }
     } else if (selectedTool === 'icon') {
       if (!iconFontReady) return;
@@ -1740,6 +1776,19 @@ const App = () => {
                   <option value="small">Small (5×7)</option>
                   <option value="large">Large (7×10)</option>
                 </select>
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--md-on-surface-variant)', cursor: 'pointer' }}>
+                  <div className={`m3-switch${textMaxWidthEnabled ? ' on' : ''}`} onClick={() => setTextMaxWidthEnabled(!textMaxWidthEnabled)} style={{ width: 36, height: 22 }}>
+                    <div className="thumb" style={{ width: textMaxWidthEnabled ? 14 : 10, height: textMaxWidthEnabled ? 14 : 10, left: textMaxWidthEnabled ? 17 : 5 }} />
+                  </div>
+                  Max width (scrolls if exceeded)
+                </label>
+                {textMaxWidthEnabled && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <input type="range" min="4" max={CANVAS_WIDTH} value={textMaxWidth} onChange={(e) => setTextMaxWidth(parseInt(e.target.value))} style={{ flex: 1 }} />
+                    <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', width: 42, textAlign: 'right' }}>{textMaxWidth}px</span>
+                  </div>
+                )}
               </div>
             )}
             {selectedTool === 'icon' && (() => {
@@ -1928,6 +1977,27 @@ const App = () => {
                     <option value="small">Small (5×7)</option>
                     <option value="large">Large (7×10)</option>
                   </select>
+
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--md-on-surface-variant)', cursor: 'pointer' }}>
+                    <div
+                      className={`m3-switch${selectedElement.maxWidth ? ' on' : ''}`}
+                      onClick={() => updateSelected({ maxWidth: selectedElement.maxWidth ? undefined : 20 })}
+                      style={{ width: 36, height: 22 }}
+                    >
+                      <div className="thumb" style={{ width: selectedElement.maxWidth ? 14 : 10, height: selectedElement.maxWidth ? 14 : 10, left: selectedElement.maxWidth ? 17 : 5 }} />
+                    </div>
+                    Max width (scrolls if exceeded)
+                  </label>
+                  {selectedElement.maxWidth != null && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input
+                        type="range" min="4" max={CANVAS_WIDTH} value={selectedElement.maxWidth}
+                        onChange={(e) => updateSelected({ maxWidth: parseInt(e.target.value) })}
+                        style={{ flex: 1 }}
+                      />
+                      <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)', width: 42, textAlign: 'right' }}>{selectedElement.maxWidth}px</span>
+                    </div>
+                  )}
 
                   <div>
                     <label className="m3-field-label" style={{ marginBottom: 4 }}>{selectedElement.entityId ? 'Re-bind entity' : 'Bind to live entity'}</label>

@@ -421,19 +421,32 @@ const FONTS = {
   }
 };
 
-// Convert elements to pixel array
-function getTextPixels(text, x, y, fontName, color) {
+const TEXT_SCROLL_SPEED = 6; // cells/second — must match public/index.html's copy
+
+// Convert elements to pixel array. Text wider than maxWidth marquees across
+// that window instead of running off the canvas, driven by wall-clock time
+// so every poll (and the browser preview) reads a consistent, moving
+// position rather than each starting its own animation from zero.
+function getTextPixels(text, x, y, fontName, color, maxWidth) {
   const font = FONTS[fontName] || FONTS.small;
   const pixels = [];
-  let cursorX = x;
-  
-  for (const char of text.toUpperCase()) {
+  const upper = text.toUpperCase();
+  const textWidth = upper.length * (font.width + 1);
+  const scrolling = !!maxWidth && textWidth > maxWidth;
+  const shift = scrolling
+    ? maxWidth - Math.floor((Date.now() / 1000 * TEXT_SCROLL_SPEED) % (maxWidth + textWidth))
+    : 0;
+
+  let cursorX = 0;
+  for (const char of upper) {
     const charData = font.chars[char] || font.chars[' '];
     if (charData) {
       for (let row = 0; row < font.height; row++) {
         for (let col = 0; col < font.width; col++) {
           if ((charData[row] >> (font.width - 1 - col)) & 1) {
-            const px = cursorX + col;
+            const windowLocalX = cursorX + col + shift;
+            if (maxWidth && (windowLocalX < 0 || windowLocalX >= maxWidth)) continue;
+            const px = x + windowLocalX;
             const py = y + row;
             if (px >= 0 && px < 64 && py >= 0 && py < 32) {
               pixels.push({ x: px, y: py, r: color.r, g: color.g, b: color.b });
@@ -474,7 +487,7 @@ function getElementPixels(el) {
     pixels.push({ x: el.x, y: el.y, r: color.r, g: color.g, b: color.b });
   }
   else if (el.type === 'text') {
-    return getTextPixels(el.text, el.x, el.y, el.fontSize, color);
+    return getTextPixels(el.text, el.x, el.y, el.fontSize, color, el.maxWidth);
   }
   else if (el.type === 'icon') {
     // The Material Symbols glyph is rasterized in the browser (canvas + the
