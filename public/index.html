@@ -713,9 +713,44 @@ const App = () => {
   const framesRef = useRef(frames);
   framesRef.current = frames;
 
+  // Undo/redo history. Every design edit goes through updateFrames, which
+  // snapshots the pre-edit frames onto `history` before applying the change
+  // and drops the redo stack (a fresh edit invalidates whatever was ahead).
+  // Switching screens entirely (load/new/delete) calls resetHistory instead,
+  // since jumping to unrelated content isn't something you'd want to "undo"
+  // back through.
+  const [history, setHistory] = useState([]);
+  const [future, setFuture] = useState([]);
+  const updateFrames = (updater) => {
+    const prevFrames = framesRef.current;
+    const nextFrames = typeof updater === 'function' ? updater(prevFrames) : updater;
+    setHistory(h => [...h.slice(-99), prevFrames]);
+    setFuture([]);
+    setFrames(nextFrames);
+  };
+  const resetHistory = () => { setHistory([]); setFuture([]); };
+  const undo = () => {
+    if (history.length === 0) return;
+    const prevSnapshot = history[history.length - 1];
+    setFuture(f => [...f, framesRef.current]);
+    setHistory(h => h.slice(0, -1));
+    setFrames(prevSnapshot);
+    setCurrentFrame(cf => Math.min(cf, prevSnapshot.length - 1));
+    setSelectedElement(null);
+  };
+  const redo = () => {
+    if (future.length === 0) return;
+    const nextSnapshot = future[future.length - 1];
+    setHistory(h => [...h, framesRef.current]);
+    setFuture(f => f.slice(0, -1));
+    setFrames(nextSnapshot);
+    setCurrentFrame(cf => Math.min(cf, nextSnapshot.length - 1));
+    setSelectedElement(null);
+  };
+
   const elements = frames[currentFrame] || [];
   const setElements = (updater) => {
-    setFrames(prev => {
+    updateFrames(prev => {
       const newFrames = [...prev];
       newFrames[currentFrame] = typeof updater === 'function' ? updater(newFrames[currentFrame] || []) : updater;
       return newFrames;
@@ -885,6 +920,7 @@ const App = () => {
       setFrameDelay(screen.frameDelay || 200);
       setCurrentFrame(0);
       setSelectedElement(null);
+      resetHistory();
       setLoading(false);
     } catch (e) {
       console.error('Failed to load screen:', e);
@@ -934,6 +970,7 @@ const App = () => {
         setFrames([[]]);
         setIsAnimated(false);
         setFrameDelay(200);
+        resetHistory();
       }
       fetchScreens();
       setShowNewDialog(false);
@@ -951,6 +988,7 @@ const App = () => {
         setCurrentScreenId(null);
         setFrames([[]]);
         setScreenName('Untitled');
+        resetHistory();
       }
       fetchScreens();
     } catch (e) {
@@ -1307,19 +1345,22 @@ const App = () => {
     );
   };
 
-  const addFrame = () => { setFrames(prev => [...prev, []]); setCurrentFrame(frames.length); setIsAnimated(true); };
-  const duplicateFrame = () => { setFrames(prev => [...prev, JSON.parse(JSON.stringify(prev[currentFrame]))]); setCurrentFrame(frames.length); setIsAnimated(true); };
-  const deleteFrame = () => { if (frames.length <= 1) return; setFrames(prev => prev.filter((_, i) => i !== currentFrame)); setCurrentFrame(Math.min(currentFrame, frames.length - 2)); if (frames.length <= 2) setIsAnimated(false); };
+  const addFrame = () => { updateFrames(prev => [...prev, []]); setCurrentFrame(frames.length); setIsAnimated(true); };
+  const duplicateFrame = () => { updateFrames(prev => [...prev, JSON.parse(JSON.stringify(prev[currentFrame]))]); setCurrentFrame(frames.length); setIsAnimated(true); };
+  const deleteFrame = () => { if (frames.length <= 1) return; updateFrames(prev => prev.filter((_, i) => i !== currentFrame)); setCurrentFrame(Math.min(currentFrame, frames.length - 2)); if (frames.length <= 2) setIsAnimated(false); };
 
   useEffect(() => {
     const handleKey = (e) => {
       if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') return;
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedElement) deleteSelected();
       if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveScreen(); }
+      const key = e.key.toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+      else if ((e.ctrlKey || e.metaKey) && (key === 'y' || (key === 'z' && e.shiftKey))) { e.preventDefault(); redo(); }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [selectedElement, frames, screenName]);
+  }, [selectedElement, frames, screenName, history, future]);
 
   useEffect(() => {
     if (selectedElement) {
@@ -1346,6 +1387,12 @@ const App = () => {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {saveStatus && <span style={{ fontSize: 12, color: 'var(--md-on-success-container)' }}>{saveStatus}</span>}
+          <button className="m3-icon-btn" onClick={undo} disabled={history.length === 0} title="Undo (Ctrl+Z)">
+            <Icon name="undo" />
+          </button>
+          <button className="m3-icon-btn" onClick={redo} disabled={future.length === 0} title="Redo (Ctrl+Y)">
+            <Icon name="redo" />
+          </button>
           <button className="m3-btn m3-btn-success" onClick={saveScreen}><Icon name="save" size={18} /> Save</button>
           <button className="m3-fab" onClick={() => setShowNewDialog(true)}><Icon name="add" size={20} /> New</button>
           <button className="m3-icon-btn" onClick={fetchYaml} title="View ESPHome YAML">
