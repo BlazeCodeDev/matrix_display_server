@@ -38,7 +38,7 @@ function loadSettings() {
   } catch (e) {
     console.error('Error loading settings:', e);
   }
-  return { cycle: { enabled: false, intervalSeconds: 30 } };
+  return { cycle: { enabled: false, intervalSeconds: 30 }, homeAssistant: { url: '', token: '' } };
 }
 
 function saveSettings(settings) {
@@ -67,6 +67,45 @@ function restartCycleTimer() {
     const ms = Math.max(5, cycle.intervalSeconds || 30) * 1000;
     cycleTimer = setInterval(cycleToNextScreen, ms);
   }
+}
+
+// Home Assistant REST API proxy. Credentials stay server-side; the browser
+// never sees the access token.
+async function haFetch(pathname) {
+  const settings = loadSettings();
+  const ha = settings.homeAssistant || {};
+  if (!ha.url || !ha.token) return null;
+
+  const base = ha.url.replace(/\/+$/, '');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetch(`${base}${pathname}`, {
+      headers: { Authorization: `Bearer ${ha.token}` },
+      signal: controller.signal
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// Resolve a text element's displayed string: entity-bound elements fetch
+// their live state from Home Assistant, static ones pass through unchanged.
+async function resolveElementText(el) {
+  if (el.type !== 'text' || !el.entityId) return el;
+  const state = await haFetch(`/api/states/${encodeURIComponent(el.entityId)}`);
+  if (!state) return { ...el, text: el.text || '?' };
+  const unit = state.attributes?.unit_of_measurement;
+  const text = unit ? `${state.state}${unit}` : state.state;
+  return { ...el, text };
+}
+
+async function resolveFrameElements(frameElements) {
+  return Promise.all(frameElements.map(resolveElementText));
 }
 
 // API Routes
@@ -169,9 +208,11 @@ app.get('/api/active', (req, res) => {
 
 // ============ Settings ============
 
-// Get settings (currently just the auto-cycle config)
+// Get settings. The Home Assistant token is never sent back to the browser.
 app.get('/api/settings', (req, res) => {
-  res.json(loadSettings());
+  const settings = loadSettings();
+  const ha = settings.homeAssistant || {};
+  res.json({ ...settings, homeAssistant: { url: ha.url || '', hasToken: !!ha.token } });
 });
 
 // Update settings
@@ -183,9 +224,39 @@ app.put('/api/settings', (req, res) => {
       intervalSeconds: Math.max(5, parseInt(req.body.cycle.intervalSeconds) || 30)
     };
   }
+  if (req.body.homeAssistant) {
+    const existing = settings.homeAssistant || {};
+    settings.homeAssistant = {
+      url: (req.body.homeAssistant.url ?? existing.url ?? '').trim(),
+      // Only overwrite the stored token if a new one was actually provided,
+      // so re-saving the URL doesn't require re-entering the token.
+      token: req.body.homeAssistant.token ? req.body.homeAssistant.token.trim() : (existing.token || '')
+    };
+  }
   saveSettings(settings);
   restartCycleTimer();
-  res.json(settings);
+  const ha = settings.homeAssistant || {};
+  res.json({ ...settings, homeAssistant: { url: ha.url || '', hasToken: !!ha.token } });
+});
+
+// Search Home Assistant entities (for the designer's entity picker)
+app.get('/api/ha/entities', async (req, res) => {
+  const states = await haFetch('/api/states');
+  if (!states) return res.status(502).json({ error: 'Could not reach Home Assistant. Check URL/token in Settings.' });
+  const q = (req.query.q || '').toLowerCase();
+  const matches = states
+    .map(s => ({ entityId: s.entity_id, name: s.attributes?.friendly_name || s.entity_id, state: s.state }))
+    .filter(e => !q || e.entityId.toLowerCase().includes(q) || e.name.toLowerCase().includes(q))
+    .slice(0, 50);
+  res.json({ entities: matches });
+});
+
+// Current state of a single entity (for live preview while designing)
+app.get('/api/ha/state/:entityId', async (req, res) => {
+  const state = await haFetch(`/api/states/${encodeURIComponent(req.params.entityId)}`);
+  if (!state) return res.status(502).json({ error: 'Could not reach Home Assistant' });
+  const unit = state.attributes?.unit_of_measurement;
+  res.json({ state: state.state, unit: unit || '', text: unit ? `${state.state}${unit}` : state.state });
 });
 
 // Serve the ESPHome yaml so the web UI can always show the current config
@@ -401,21 +472,22 @@ function getElementPixels(el) {
 
 // ESP32 endpoint - returns compact pixel data for current screen
 // Format: JSON with pixels array and animation info
-app.get('/api/esp/pixels', (req, res) => {
+app.get('/api/esp/pixels', async (req, res) => {
   const data = loadData();
   const screen = data.activeScreenId ? data.screens.find(s => s.id === data.activeScreenId) : null;
   if (!screen) {
     return res.json({ id: null, name: null, isAnimated: false, frameDelay: 200, frameCount: 0, frames: [] });
   }
 
-  const frames = screen.frames.map(frameElements => {
+  const frames = await Promise.all(screen.frames.map(async frameElements => {
+    const resolved = await resolveFrameElements(frameElements);
     const allPixels = [];
-    frameElements.forEach(el => {
+    resolved.forEach(el => {
       allPixels.push(...getElementPixels(el));
     });
     return allPixels;
-  });
-  
+  }));
+
   res.json({
     id: screen.id,
     name: screen.name,
@@ -428,25 +500,26 @@ app.get('/api/esp/pixels', (req, res) => {
 
 // ESP32 endpoint - returns raw binary pixel data (more efficient)
 // Format: [frameCount:1][frameDelay:2][frame0PixelCount:2][x:1,y:1,r:1,g:1,b:1]...[frame1...]
-app.get('/api/esp/binary', (req, res) => {
+app.get('/api/esp/binary', async (req, res) => {
   const data = loadData();
   if (!data.activeScreenId) {
     return res.send(Buffer.from([0]));
   }
-  
+
   const screen = data.screens.find(s => s.id === data.activeScreenId);
   if (!screen) {
     return res.send(Buffer.from([0]));
   }
-  
-  const frames = screen.frames.map(frameElements => {
+
+  const frames = await Promise.all(screen.frames.map(async frameElements => {
+    const resolved = await resolveFrameElements(frameElements);
     const allPixels = [];
-    frameElements.forEach(el => {
+    resolved.forEach(el => {
       allPixels.push(...getElementPixels(el));
     });
     return allPixels;
-  });
-  
+  }));
+
   // Calculate buffer size
   let size = 3; // frameCount(1) + frameDelay(2)
   frames.forEach(f => {

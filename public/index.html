@@ -343,6 +343,12 @@ const App = () => {
   const [selectedElement, setSelectedElement] = useState(null);
   const [textInput, setTextInput] = useState('Hello');
   const [fontSize, setFontSize] = useState('small');
+  const [textMode, setTextMode] = useState('static');
+  const [entityQuery, setEntityQuery] = useState('');
+  const [entitySuggestions, setEntitySuggestions] = useState([]);
+  const [entitySearching, setEntitySearching] = useState(false);
+  const [selectedEntity, setSelectedEntity] = useState(null);
+  const [entityPreviewText, setEntityPreviewText] = useState('');
   const [filled, setFilled] = useState(false);
   const [screenName, setScreenName] = useState('Untitled');
   const [dragMode, setDragMode] = useState(null);
@@ -358,6 +364,10 @@ const App = () => {
   const [settingsStatus, setSettingsStatus] = useState('');
   const [cycleEnabled, setCycleEnabled] = useState(false);
   const [cycleInterval, setCycleInterval] = useState(30);
+  const [haUrl, setHaUrl] = useState('');
+  const [haUrlInput, setHaUrlInput] = useState('');
+  const [haTokenInput, setHaTokenInput] = useState('');
+  const [haHasToken, setHaHasToken] = useState(false);
   const [showYaml, setShowYaml] = useState(false);
   const [yamlContent, setYamlContent] = useState('');
   const [yamlLoading, setYamlLoading] = useState(false);
@@ -387,6 +397,9 @@ const App = () => {
       const settings = await res.json();
       setCycleEnabled(!!settings.cycle?.enabled);
       setCycleInterval(settings.cycle?.intervalSeconds || 30);
+      setHaUrl(settings.homeAssistant?.url || '');
+      setHaUrlInput(settings.homeAssistant?.url || '');
+      setHaHasToken(!!settings.homeAssistant?.hasToken);
     } catch (e) {
       console.error('Failed to fetch settings:', e);
     }
@@ -399,17 +412,55 @@ const App = () => {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          cycle: { enabled: cycleEnabled, intervalSeconds: cycleInterval }
+          cycle: { enabled: cycleEnabled, intervalSeconds: cycleInterval },
+          homeAssistant: { url: haUrlInput, token: haTokenInput || undefined }
         })
       });
       const settings = await res.json();
       setCycleEnabled(!!settings.cycle?.enabled);
       setCycleInterval(settings.cycle?.intervalSeconds || 30);
+      setHaUrl(settings.homeAssistant?.url || '');
+      setHaHasToken(!!settings.homeAssistant?.hasToken);
+      setHaTokenInput('');
       setSettingsStatus('Saved');
       setTimeout(() => setSettingsStatus(''), 1500);
     } catch (e) {
       console.error('Failed to save settings:', e);
       setSettingsStatus('Failed to save');
+    }
+  };
+
+  // Entity search for the Text tool's "Live entity" mode (debounced)
+  useEffect(() => {
+    if (textMode !== 'entity' || !entityQuery.trim()) {
+      setEntitySuggestions([]);
+      return;
+    }
+    setEntitySearching(true);
+    const handle = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/ha/entities?q=${encodeURIComponent(entityQuery)}`);
+        const data = await res.json();
+        setEntitySuggestions(res.ok ? (data.entities || []) : []);
+      } catch (e) {
+        setEntitySuggestions([]);
+      } finally {
+        setEntitySearching(false);
+      }
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [entityQuery, textMode]);
+
+  const pickEntity = async (entity) => {
+    setSelectedEntity(entity);
+    setEntityQuery(entity.name);
+    setEntitySuggestions([]);
+    try {
+      const res = await fetch(`/api/ha/state/${encodeURIComponent(entity.entityId)}`);
+      const data = await res.json();
+      setEntityPreviewText(res.ok ? data.text : entity.state);
+    } catch (e) {
+      setEntityPreviewText(entity.state);
     }
   };
 
@@ -717,7 +768,11 @@ const App = () => {
     } else if (selectedTool === 'pixel') {
       addElement({ type: 'pixel', x: pos.x, y: pos.y, color: { ...currentColor } });
     } else if (selectedTool === 'text') {
-      addElement({ type: 'text', x: pos.x, y: pos.y, text: textInput, fontSize, color: { ...currentColor } });
+      if (textMode === 'entity' && selectedEntity) {
+        addElement({ type: 'text', x: pos.x, y: pos.y, text: entityPreviewText || selectedEntity.state, fontSize, color: { ...currentColor }, entityId: selectedEntity.entityId });
+      } else {
+        addElement({ type: 'text', x: pos.x, y: pos.y, text: textInput, fontSize, color: { ...currentColor } });
+      }
     } else if (selectedTool === 'eraser') {
       removeElementAt(pos);
     }
@@ -981,7 +1036,46 @@ const App = () => {
             )}
             {selectedTool === 'text' && (
               <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <input type="text" value={textInput} onChange={(e) => setTextInput(e.target.value)} className="m3-input" placeholder="Text" />
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <button className={`m3-btn m3-btn-sm ${textMode === 'static' ? 'm3-btn-tonal' : 'm3-btn-outlined'}`} style={{ flex: 1 }} onClick={() => setTextMode('static')}>Static</button>
+                  <button className={`m3-btn m3-btn-sm ${textMode === 'entity' ? 'm3-btn-tonal' : 'm3-btn-outlined'}`} style={{ flex: 1 }} onClick={() => setTextMode('entity')}>Live entity</button>
+                </div>
+
+                {textMode === 'static' ? (
+                  <input type="text" value={textInput} onChange={(e) => setTextInput(e.target.value)} className="m3-input" placeholder="Text" />
+                ) : (
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      type="text"
+                      value={entityQuery}
+                      onChange={(e) => { setEntityQuery(e.target.value); setSelectedEntity(null); }}
+                      className="m3-input"
+                      style={{ width: '100%' }}
+                      placeholder="Search HA entities…"
+                    />
+                    {!haHasToken && (
+                      <div style={{ fontSize: 10, color: 'var(--md-error)', marginTop: 4 }}>
+                        Set up Home Assistant in Settings first.
+                      </div>
+                    )}
+                    {entitySuggestions.length > 0 && (
+                      <div style={{ marginTop: 4, maxHeight: 160, overflowY: 'auto', background: 'var(--md-surface-container-highest)', borderRadius: 'var(--md-shape-sm)' }}>
+                        {entitySuggestions.map(en => (
+                          <div key={en.entityId} onClick={() => pickEntity(en)} style={{ padding: '6px 8px', cursor: 'pointer', fontSize: 11 }} className="m3-list-item">
+                            <div style={{ color: 'var(--md-on-surface)' }}>{en.name}</div>
+                            <div style={{ color: 'var(--md-on-surface-variant)', fontSize: 10 }}>{en.entityId} — {en.state}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {selectedEntity && (
+                      <div className="m3-chip" style={{ marginTop: 6 }}>
+                        {selectedEntity.entityId} → "{entityPreviewText}"
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <select value={fontSize} onChange={(e) => setFontSize(e.target.value)} className="m3-input">
                   <option value="tiny">Tiny (3×5)</option>
                   <option value="small">Small (5×7)</option>
@@ -1018,7 +1112,13 @@ const App = () => {
             <div className="m3-panel">
               <h3 className="m3-eyebrow">Selected: {selectedElement.type}</h3>
               {selectedElement.type === 'text' && (
-                <input type="text" value={selectedElement.text} onChange={(e) => setElements(prev => prev.map(el => el.id === selectedElement.id ? { ...el, text: e.target.value } : el))} className="m3-input" style={{ width: '100%', marginBottom: 10 }} />
+                selectedElement.entityId ? (
+                  <div className="m3-chip" style={{ marginBottom: 10, display: 'block' }}>
+                    {selectedElement.entityId} (live — updates on device)
+                  </div>
+                ) : (
+                  <input type="text" value={selectedElement.text} onChange={(e) => setElements(prev => prev.map(el => el.id === selectedElement.id ? { ...el, text: e.target.value } : el))} className="m3-input" style={{ width: '100%', marginBottom: 10 }} />
+                )
               )}
               <button onClick={deleteSelected} className="m3-btn m3-btn-danger" style={{ width: '100%' }}><Icon name="delete" size={16} /> Delete</button>
             </div>
@@ -1033,7 +1133,7 @@ const App = () => {
                 color: selectedElement?.id === el.id ? 'var(--md-on-secondary-container)' : 'var(--md-on-surface-variant)',
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
               }}>
-                <span>{el.type === 'text' ? `T "${el.text.slice(0,6)}"` : el.type}</span>
+                <span>{el.type === 'text' ? (el.entityId ? `@ ${el.entityId.split('.').pop().slice(0,8)}` : `T "${el.text.slice(0,6)}"`) : el.type}</span>
                 <div style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: `rgb(${el.color.r}, ${el.color.g}, ${el.color.b})` }} />
               </div>
             ))}
@@ -1065,6 +1165,31 @@ const App = () => {
                 <span style={{ fontSize: 11, color: 'var(--md-on-surface-variant)' }}>seconds</span>
               </div>
             </div>
+
+            <hr className="m3-divider" />
+
+            <label className="m3-field-label">Home Assistant</label>
+            <p style={{ margin: '0 0 10px', fontSize: 12, color: 'var(--md-on-surface-variant)', lineHeight: 1.5 }}>
+              Lets the Text tool place a live entity's value on the canvas. Needs a
+              <a href="https://www.home-assistant.io/docs/authentication/#your-account-profile" target="_blank" rel="noreferrer" style={{ color: 'var(--md-primary)', margin: '0 4px' }}>Long-Lived Access Token</a>
+              from your HA profile page.
+            </p>
+            <input
+              type="text"
+              value={haUrlInput}
+              onChange={(e) => setHaUrlInput(e.target.value)}
+              placeholder="http://homeassistant.local:8123"
+              className="m3-input"
+              style={{ width: '100%', marginBottom: 8 }}
+            />
+            <input
+              type="password"
+              value={haTokenInput}
+              onChange={(e) => setHaTokenInput(e.target.value)}
+              placeholder={haHasToken ? 'Token saved — leave blank to keep it' : 'Long-Lived Access Token'}
+              className="m3-input"
+              style={{ width: '100%', marginBottom: 16 }}
+            />
 
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
               <button className="m3-btn m3-btn-success" style={{ flex: 1 }} onClick={saveSettings}>Save</button>
