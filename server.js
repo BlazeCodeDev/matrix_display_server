@@ -93,9 +93,22 @@ async function haFetch(pathname) {
   }
 }
 
+// Pick the color for the highest colorRules threshold the value meets or
+// exceeds, e.g. [{threshold:80,color:red}] recolors once value >= 80.
+// Falls back to the element's base color if no rule matches (or none set).
+function applyColorRules(baseColor, colorRules, value) {
+  if (!colorRules || !colorRules.length || value == null || Number.isNaN(value)) return baseColor;
+  let best = null;
+  for (const rule of colorRules) {
+    if (value >= rule.threshold && (!best || rule.threshold > best.threshold)) best = rule;
+  }
+  return best ? best.color : baseColor;
+}
+
 // Resolve an entity-bound element against its live Home Assistant state:
-// text elements get the formatted state string, bars get a clamped numeric
-// value. Static (non-entity-bound) elements pass through unchanged.
+// text elements get the formatted state string (and optional threshold-based
+// color), bars get a clamped numeric value. Static (non-entity-bound)
+// elements pass through unchanged.
 async function resolveElement(el) {
   if (!el.entityId) return el;
 
@@ -104,7 +117,9 @@ async function resolveElement(el) {
     if (!state) return { ...el, text: el.text || '?' };
     const unit = state.attributes?.unit_of_measurement;
     const text = unit ? `${state.state}${unit}` : state.state;
-    return { ...el, text };
+    const value = parseFloat(state.state);
+    const color = applyColorRules(el.color, el.colorRules, value);
+    return { ...el, text, color };
   }
 
   if (el.type === 'bar') {
