@@ -103,12 +103,55 @@ configured server URL.
 - **View ESPHome YAML** — the `</>` button in the header always shows the current
   `matrixdisplay.yaml` content (served from `GET /api/esphome-yaml`) with a copy button, so
   you can paste it straight into ESPHome.
-- **Home Assistant metrics** — call `esphome.matrix_display_set_metric` from an HA automation
-  with a `key` (e.g. `"cpu"`) and `value` (float) to show arbitrary live values (CPU load,
-  temperature, etc.) as a small status line at the bottom of the display, regardless of what's
-  designed.
+- **Home Assistant metrics** — up to 4 live values (CPU load, temperature, etc.) shown as a
+  small status line at the bottom of the display, regardless of what's designed. Two ways in:
+  - **Pull (recommended)** — a `sensor: platform: homeassistant` block in the yaml watches any
+    existing HA entity directly and updates automatically on change, no automation needed.
+  - **Push** — call `esphome.matrix_display_set_metric` from an HA automation with a `key` and
+    `value`, for values HA doesn't already have as a sensor.
+  Either way, a given `key` updates in place rather than adding a duplicate.
 - Auto brightness (LDR-based), Animation Speed, and a Display Power switch are also exposed
   as Home Assistant entities.
+
+### Showing Home Assistant entities on the display
+
+The yaml ships with one example already wired up (`sensor.processor_use` → shown as `cpu`).
+To add more, copy the commented block right below it in the `sensor:` section:
+
+```yaml
+- platform: homeassistant
+  entity_id: sensor.living_room_temperature   # <-- any existing HA entity_id
+  id: ha_temp                                 # <-- must be unique per block
+  internal: true
+  on_value:
+    then:
+      - script.execute:
+          id: update_ha_metric
+          metric_key: "temp"                  # <-- short label shown on the display
+          metric_value: !lambda 'return x;'
+```
+
+If `sensor.processor_use` doesn't exist for you, enable the **System Monitor** integration in
+HA first (Settings → Devices & Services), or point the example at any sensor you already have.
+
+Prefer to push instead of pull for a particular value (e.g. something computed in an
+automation rather than a plain sensor)? Call the API service directly:
+
+```yaml
+automation:
+  - alias: "Push a computed value to Matrix Display"
+    trigger:
+      - platform: time_pattern
+        seconds: "/10"
+    action:
+      - service: esphome.matrix_display_set_metric
+        data:
+          key: "cpu"
+          value: "{{ states('sensor.processor_use') | float(0) }}"
+```
+
+The service only appears in Home Assistant's service list once the ESP32 has connected via
+the native API at least once after flashing this yaml.
 
 ---
 

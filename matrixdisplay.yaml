@@ -26,32 +26,46 @@ ota:
 logger:
   level: INFO
 
+# Shared "add or update a metric" logic, used both by entities pulled directly
+# from Home Assistant below and by the set_metric API service further down.
+script:
+  - id: update_ha_metric
+    parameters:
+      metric_key: string
+      metric_value: float
+    then:
+      - lambda: |-
+          for (size_t i = 0; i < id(ha_metric_labels).size(); i++) {
+            if (id(ha_metric_labels)[i] == metric_key) {
+              id(ha_metric_values)[i] = metric_value;
+              return;
+            }
+          }
+          if (id(ha_metric_labels).size() < 4) {
+            id(ha_metric_labels).push_back(metric_key);
+            id(ha_metric_values).push_back(metric_value);
+          } else {
+            id(ha_metric_labels)[0] = metric_key;
+            id(ha_metric_values)[0] = metric_value;
+          }
+
 api:
   encryption:
     key: "LeGjKLDUHdvS1WPKIm5PFbeE3CCcUHPge48WxknCk6w="
   services:
     # Call from Home Assistant as esphome.matrix_display_set_metric with
     # a short label ("cpu", "temp", ...) and a numeric value. Shown as a
-    # small status line at the bottom of the display.
+    # small status line at the bottom of the display. Useful for values HA
+    # doesn't already have as a sensor (e.g. computed in an automation).
     - service: set_metric
       variables:
         key: string
         value: float
       then:
-        - lambda: |-
-            for (size_t i = 0; i < id(ha_metric_labels).size(); i++) {
-              if (id(ha_metric_labels)[i] == key) {
-                id(ha_metric_values)[i] = value;
-                return;
-              }
-            }
-            if (id(ha_metric_labels).size() < 4) {
-              id(ha_metric_labels).push_back(key);
-              id(ha_metric_values).push_back(value);
-            } else {
-              id(ha_metric_labels)[0] = key;
-              id(ha_metric_values)[0] = value;
-            }
+        - script.execute:
+            id: update_ha_metric
+            metric_key: !lambda 'return key;'
+            metric_value: !lambda 'return value;'
 
 wifi:
   ssid: "404 Network unavailable"
@@ -96,6 +110,34 @@ sensor:
       - sliding_window_moving_average:
           window_size: 5
           send_every: 1
+
+  # --- Home Assistant entities shown on the display ---
+  # Add one block per numeric HA entity you want to show, following this
+  # pattern. Updates automatically whenever the entity changes in HA — no
+  # automation needed. `internal: true` keeps it from being re-exposed as a
+  # duplicate sensor back in HA. `metric_key` is the short label shown on the
+  # display (kept short — the screen is only 64px wide), independent of id/name.
+  - platform: homeassistant
+    entity_id: sensor.processor_use
+    id: ha_cpu
+    internal: true
+    on_value:
+      then:
+        - script.execute:
+            id: update_ha_metric
+            metric_key: "cpu"
+            metric_value: !lambda 'return x;'
+  # Copy the block above for more, e.g.:
+  # - platform: homeassistant
+  #   entity_id: sensor.living_room_temperature
+  #   id: ha_temp
+  #   internal: true
+  #   on_value:
+  #     then:
+  #       - script.execute:
+  #           id: update_ha_metric
+  #           metric_key: "temp"
+  #           metric_value: !lambda 'return x;'
 
 number:
   - platform: template
