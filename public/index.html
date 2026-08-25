@@ -1167,6 +1167,24 @@ const App = () => {
     }
   };
 
+  // Manual per-screen switch for auto-cycle membership — separate from the
+  // HA-driven hideRules below: excluding a screen here still lets you
+  // display it by hand via Set Active, it's just skipped while cycling.
+  const toggleExcludeFromCycle = async (screen) => {
+    const excludeFromCycle = !screen.excludeFromCycle;
+    setScreens(prev => prev.map(s => s.id === screen.id ? { ...s, excludeFromCycle } : s));
+    try {
+      await fetch(`/api/screens/${screen.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ excludeFromCycle }),
+      });
+    } catch (e) {
+      console.error('Failed to update auto-cycle setting:', e);
+      fetchScreens();
+    }
+  };
+
   // Entity search for a visibility rule's entity field. One shared
   // query/suggestions pair with `ruleSearchIndex` tracking which rule row
   // currently owns it, same pattern as the editor's other entity pickers —
@@ -1721,6 +1739,7 @@ const App = () => {
                   <div style={{ fontSize: 11, color: 'var(--md-on-surface-variant)', marginTop: 2 }}>
                     {s.isAnimated ? `${s.frameCount} frames` : 'Static'}
                     {s.hideRules?.length > 0 && ` · ${s.hideRules.length} hide rule${s.hideRules.length > 1 ? 's' : ''}`}
+                    {s.excludeFromCycle && ' · excluded from auto-cycle'}
                   </div>
                   <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
                     <button onClick={(e) => { e.stopPropagation(); setActive(s.id); }} className={`m3-btn m3-btn-sm ${activeScreenId === s.id ? 'm3-btn-tonal' : 'm3-btn-outlined'}`}>
@@ -1737,6 +1756,19 @@ const App = () => {
                     <button onClick={(e) => { e.stopPropagation(); deleteScreen(s.id); }} className="m3-icon-btn m3-icon-btn-sm">
                       <Icon name="delete" size={16} />
                     </button>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }} onClick={(e) => e.stopPropagation()}>
+                    <div
+                      className={`m3-switch${!s.excludeFromCycle ? ' on' : ''}`}
+                      onClick={() => toggleExcludeFromCycle(s)}
+                      role="switch"
+                      aria-checked={!s.excludeFromCycle}
+                      title={s.excludeFromCycle ? 'Excluded from auto-cycle — click to include' : 'Included in auto-cycle — click to exclude'}
+                      style={{ width: 30, height: 18 }}
+                    >
+                      <div className="thumb" />
+                    </div>
+                    <span style={{ fontSize: 10, color: 'var(--md-on-surface-variant)' }}>Auto-cycle</span>
                   </div>
                 </div>
               </div>

@@ -54,11 +54,13 @@ async function cycleToNextScreen() {
   if (data.screens.length < 2) return;
   const startIndex = data.screens.findIndex(s => s.id === data.activeScreenId);
   // Walk forward through the list (wrapping) and land on the first screen
-  // that isn't currently hidden. If every screen is hidden, leave
-  // activeScreenId as-is — the esp endpoints already fall back to the
-  // no-active-screen placeholder for a hidden active screen.
+  // that isn't manually excluded and isn't currently hidden by a rule. If
+  // every screen is skipped, leave activeScreenId as-is — the esp
+  // endpoints already fall back to the no-active-screen placeholder for a
+  // hidden active screen.
   for (let step = 1; step <= data.screens.length; step++) {
     const candidate = data.screens[(startIndex + step) % data.screens.length];
+    if (candidate.excludeFromCycle) continue;
     if (!(await isScreenHidden(candidate))) {
       data.activeScreenId = candidate.id;
       saveData(data);
@@ -199,7 +201,8 @@ app.get('/api/screens', (req, res) => {
     frameCount: s.frames?.length || 1,
     createdAt: s.createdAt,
     updatedAt: s.updatedAt,
-    hideRules: s.hideRules || []
+    hideRules: s.hideRules || [],
+    excludeFromCycle: s.excludeFromCycle || false
   }));
   res.json({ screens, activeScreenId: data.activeScreenId });
 });
@@ -267,6 +270,7 @@ app.put('/api/screens/:id', (req, res) => {
     isAnimated: req.body.isAnimated ?? data.screens[index].isAnimated,
     frameDelay: req.body.frameDelay ?? data.screens[index].frameDelay,
     hideRules: req.body.hideRules ?? data.screens[index].hideRules,
+    excludeFromCycle: req.body.excludeFromCycle ?? data.screens[index].excludeFromCycle,
     updatedAt: new Date().toISOString()
   };
   saveData(data);
