@@ -727,6 +727,14 @@ const App = () => {
   const [saveStatus, setSaveStatus] = useState('');
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [newScreenName, setNewScreenName] = useState('');
+  // Per-screen "hide from auto-cycle" rules, edited in their own dialog
+  // (separate from the main editor since you might want to set rules on a
+  // screen other than the one currently open).
+  const [visibilityScreenId, setVisibilityScreenId] = useState(null);
+  const [visibilityRules, setVisibilityRules] = useState([]);
+  const [ruleSearchIndex, setRuleSearchIndex] = useState(null);
+  const [ruleEntityQuery, setRuleEntityQuery] = useState('');
+  const [ruleEntitySuggestions, setRuleEntitySuggestions] = useState([]);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsStatus, setSettingsStatus] = useState('');
   const [cycleEnabled, setCycleEnabled] = useState(false);
@@ -1133,6 +1141,79 @@ const App = () => {
       fetchScreens();
     } catch (e) {
       console.error('Failed to set active:', e);
+    }
+  };
+
+  // Swaps a screen with its neighbor in the list — this order is also what
+  // auto-cycle walks through server-side, so reordering the list and
+  // reordering the cycle are the same operation.
+  const moveScreen = async (id, direction) => {
+    const idx = screens.findIndex(s => s.id === id);
+    const swapWith = idx + direction;
+    if (idx === -1 || swapWith < 0 || swapWith >= screens.length) return;
+    const reordered = [...screens];
+    [reordered[idx], reordered[swapWith]] = [reordered[swapWith], reordered[idx]];
+    setScreens(reordered);
+    try {
+      await fetch('/api/screens/reorder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order: reordered.map(s => s.id) }),
+      });
+    } catch (e) {
+      console.error('Failed to reorder screens:', e);
+      fetchScreens();
+    }
+  };
+
+  // Entity search for a visibility rule's entity field. One shared
+  // query/suggestions pair with `ruleSearchIndex` tracking which rule row
+  // currently owns it, same pattern as the editor's other entity pickers —
+  // only one rule's dropdown is "live" at a time, which is fine since only
+  // one can be focused anyway.
+  useEffect(() => {
+    if (ruleSearchIndex == null || !ruleEntityQuery.trim()) { setRuleEntitySuggestions([]); return; }
+    const handle = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/ha/entities?q=${encodeURIComponent(ruleEntityQuery)}`);
+        const data = await res.json();
+        setRuleEntitySuggestions(res.ok ? (data.entities || []) : []);
+      } catch (e) {
+        setRuleEntitySuggestions([]);
+      }
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [ruleEntityQuery, ruleSearchIndex]);
+
+  const openVisibilityRules = (screen) => {
+    setVisibilityScreenId(screen.id);
+    setVisibilityRules((screen.hideRules || []).map(r => ({ ...r })));
+    setRuleSearchIndex(null);
+    setRuleEntityQuery('');
+    setRuleEntitySuggestions([]);
+  };
+  const closeVisibilityRules = () => setVisibilityScreenId(null);
+  const addVisibilityRule = () => setVisibilityRules(prev => [...prev, { entityId: '', type: 'state', value: 'unavailable' }]);
+  const updateVisibilityRule = (i, patch) => setVisibilityRules(prev => prev.map((r, idx) => idx === i ? { ...r, ...patch } : r));
+  const removeVisibilityRule = (i) => setVisibilityRules(prev => prev.filter((_, idx) => idx !== i));
+  const pickRuleEntity = (i, entity) => {
+    updateVisibilityRule(i, { entityId: entity.entityId });
+    setRuleSearchIndex(null);
+    setRuleEntityQuery('');
+    setRuleEntitySuggestions([]);
+  };
+  const saveVisibilityRules = async () => {
+    const cleanRules = visibilityRules.filter(r => r.entityId && r.entityId.trim());
+    try {
+      await fetch(`/api/screens/${visibilityScreenId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hideRules: cleanRules }),
+      });
+      fetchScreens();
+      setVisibilityScreenId(null);
+    } catch (e) {
+      console.error('Failed to save visibility rules:', e);
     }
   };
 
@@ -1621,22 +1702,41 @@ const App = () => {
           {screens.length === 0 ? (
             <p style={{ color: 'var(--md-outline)', fontSize: 12 }}>No screens yet</p>
           ) : (
-            screens.map(s => (
-              <div key={s.id} onClick={() => loadScreen(s.id)} className={`m3-list-item${currentScreenId === s.id ? ' selected' : ''}`}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: 13, color: 'var(--md-on-surface)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
-                  {activeScreenId === s.id && <span className="m3-chip">LIVE</span>}
-                </div>
-                <div style={{ fontSize: 11, color: 'var(--md-on-surface-variant)', marginTop: 2 }}>
-                  {s.isAnimated ? `${s.frameCount} frames` : 'Static'}
-                </div>
-                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                  <button onClick={(e) => { e.stopPropagation(); setActive(s.id); }} className={`m3-btn m3-btn-sm ${activeScreenId === s.id ? 'm3-btn-tonal' : 'm3-btn-outlined'}`}>
-                    {activeScreenId === s.id ? <><Icon name="check_circle" size={14} /> Active</> : 'Set Active'}
+            screens.map((s, idx) => (
+              <div key={s.id} onClick={() => loadScreen(s.id)} className={`m3-list-item${currentScreenId === s.id ? ' selected' : ''}`} style={{ display: 'flex', gap: 6 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
+                  <button onClick={() => moveScreen(s.id, -1)} disabled={idx === 0} className="m3-icon-btn" style={{ width: 20, height: 18, borderRadius: 4, padding: 0 }} title="Move up (also moves it earlier in auto-cycle)">
+                    <Icon name="keyboard_arrow_up" size={12} />
                   </button>
-                  <button onClick={(e) => { e.stopPropagation(); deleteScreen(s.id); }} className="m3-icon-btn m3-icon-btn-sm">
-                    <Icon name="delete" size={16} />
+                  <button onClick={() => moveScreen(s.id, 1)} disabled={idx === screens.length - 1} className="m3-icon-btn" style={{ width: 20, height: 18, borderRadius: 4, padding: 0 }} title="Move down (also moves it later in auto-cycle)">
+                    <Icon name="keyboard_arrow_down" size={12} />
                   </button>
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 13, color: 'var(--md-on-surface)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
+                    {activeScreenId === s.id && <span className="m3-chip">LIVE</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--md-on-surface-variant)', marginTop: 2 }}>
+                    {s.isAnimated ? `${s.frameCount} frames` : 'Static'}
+                    {s.hideRules?.length > 0 && ` · ${s.hideRules.length} hide rule${s.hideRules.length > 1 ? 's' : ''}`}
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                    <button onClick={(e) => { e.stopPropagation(); setActive(s.id); }} className={`m3-btn m3-btn-sm ${activeScreenId === s.id ? 'm3-btn-tonal' : 'm3-btn-outlined'}`}>
+                      {activeScreenId === s.id ? <><Icon name="check_circle" size={14} /> Active</> : 'Set Active'}
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); openVisibilityRules(s); }}
+                      className="m3-icon-btn m3-icon-btn-sm"
+                      title="Visibility rules"
+                      style={s.hideRules?.length > 0 ? { color: 'var(--md-primary)' } : undefined}
+                    >
+                      <Icon name="visibility_off" size={16} />
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); deleteScreen(s.id); }} className="m3-icon-btn m3-icon-btn-sm">
+                      <Icon name="delete" size={16} />
+                    </button>
+                  </div>
                 </div>
               </div>
             ))
@@ -2327,6 +2427,89 @@ const App = () => {
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button className="m3-btn m3-btn-outlined" onClick={() => setShowNewDialog(false)}>Cancel</button>
               <button className="m3-btn m3-btn-filled" onClick={() => createNewScreen(newScreenName || 'Untitled')}>Create</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {visibilityScreenId && (
+        <div className="m3-scrim" onClick={closeVisibilityRules}>
+          <div className="m3-dialog" style={{ width: 420, maxHeight: '80vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 500 }}>Visibility Rules</h3>
+            <p style={{ margin: '0 0 16px', fontSize: 12, color: 'var(--md-on-surface-variant)', lineHeight: 1.5 }}>
+              Hide this screen from Auto Cycle — and fall back to the no-active-screen placeholder if it's the one currently active — when <strong>any</strong> rule below matches.
+            </p>
+            {!haHasToken && (
+              <div style={{ fontSize: 11, color: 'var(--md-error)', marginBottom: 12 }}>
+                Set up Home Assistant in Settings first, or these rules won't have anything to check.
+              </div>
+            )}
+            {visibilityRules.length === 0 && (
+              <p style={{ fontSize: 12, color: 'var(--md-on-surface-variant)', marginBottom: 12 }}>No rules yet — this screen is always shown.</p>
+            )}
+            {visibilityRules.map((rule, i) => (
+              <div key={i} style={{ padding: 10, marginBottom: 10, background: 'var(--md-surface-container-highest)', borderRadius: 'var(--md-shape-sm)' }}>
+                <div style={{ position: 'relative', marginBottom: 6 }}>
+                  <input
+                    type="text"
+                    value={ruleSearchIndex === i ? ruleEntityQuery : rule.entityId}
+                    onChange={(e) => { setRuleSearchIndex(i); setRuleEntityQuery(e.target.value); }}
+                    onFocus={() => { setRuleSearchIndex(i); setRuleEntityQuery(rule.entityId); }}
+                    className="m3-input"
+                    style={{ width: '100%' }}
+                    placeholder="Search HA entities…"
+                  />
+                  {ruleSearchIndex === i && ruleEntitySuggestions.length > 0 && (
+                    <div style={{ marginTop: 4, maxHeight: 140, overflowY: 'auto', background: 'var(--md-surface-container-high)', borderRadius: 'var(--md-shape-sm)' }}>
+                      {ruleEntitySuggestions.map(en => (
+                        <div key={en.entityId} onClick={() => pickRuleEntity(i, en)} style={{ padding: '6px 8px', cursor: 'pointer', fontSize: 11 }} className="m3-list-item">
+                          <div style={{ color: 'var(--md-on-surface)' }}>{en.name}</div>
+                          <div style={{ color: 'var(--md-on-surface-variant)', fontSize: 10 }}>{en.entityId} — {en.state}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <select
+                    value={rule.type}
+                    onChange={(e) => updateVisibilityRule(i, { type: e.target.value, value: e.target.value === 'state' ? 'unavailable' : 0 })}
+                    className="m3-input"
+                    style={{ flex: 1 }}
+                  >
+                    <option value="state">State is</option>
+                    <option value="above">Value above</option>
+                    <option value="below">Value below</option>
+                  </select>
+                  {rule.type === 'state' ? (
+                    <input type="text" value={rule.value} onChange={(e) => updateVisibilityRule(i, { value: e.target.value })} className="m3-input" style={{ width: 110 }} placeholder="unknown" />
+                  ) : (
+                    <input type="number" value={rule.value} onChange={(e) => updateVisibilityRule(i, { value: parseFloat(e.target.value) || 0 })} className="m3-input" style={{ width: 90 }} />
+                  )}
+                  <button onClick={() => removeVisibilityRule(i)} className="m3-icon-btn m3-icon-btn-sm"><Icon name="delete" size={14} /></button>
+                </div>
+                {rule.type === 'state' && (
+                  <div style={{ display: 'flex', gap: 4, marginTop: 6 }}>
+                    {['unavailable', 'unknown', 'off', 'on'].map(v => (
+                      <span
+                        key={v}
+                        onClick={() => updateVisibilityRule(i, { value: v })}
+                        className="m3-chip"
+                        style={{ cursor: 'pointer', opacity: rule.value === v ? 1 : 0.55 }}
+                      >
+                        {v}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+            <button className="m3-btn m3-btn-outlined m3-btn-sm" onClick={addVisibilityRule} style={{ marginBottom: 16 }}>
+              <Icon name="add" size={14} /> Add Rule
+            </button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="m3-btn m3-btn-success" style={{ flex: 1 }} onClick={saveVisibilityRules}>Save</button>
+              <button className="m3-btn m3-btn-outlined" onClick={closeVisibilityRules}>Cancel</button>
             </div>
           </div>
         </div>

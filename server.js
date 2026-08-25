@@ -49,13 +49,22 @@ function saveSettings(settings) {
 // /api/esp/pixels on its own schedule, so there is nothing to push here.
 let cycleTimer = null;
 
-function cycleToNextScreen() {
+async function cycleToNextScreen() {
   const data = loadData();
   if (data.screens.length < 2) return;
-  const index = data.screens.findIndex(s => s.id === data.activeScreenId);
-  const next = data.screens[(index + 1) % data.screens.length];
-  data.activeScreenId = next.id;
-  saveData(data);
+  const startIndex = data.screens.findIndex(s => s.id === data.activeScreenId);
+  // Walk forward through the list (wrapping) and land on the first screen
+  // that isn't currently hidden. If every screen is hidden, leave
+  // activeScreenId as-is — the esp endpoints already fall back to the
+  // no-active-screen placeholder for a hidden active screen.
+  for (let step = 1; step <= data.screens.length; step++) {
+    const candidate = data.screens[(startIndex + step) % data.screens.length];
+    if (!(await isScreenHidden(candidate))) {
+      data.activeScreenId = candidate.id;
+      saveData(data);
+      return;
+    }
+  }
 }
 
 function restartCycleTimer() {
@@ -65,7 +74,7 @@ function restartCycleTimer() {
   const cycle = settings.cycle || {};
   if (cycle.enabled) {
     const ms = Math.max(5, cycle.intervalSeconds || 30) * 1000;
-    cycleTimer = setInterval(cycleToNextScreen, ms);
+    cycleTimer = setInterval(() => { cycleToNextScreen().catch(e => console.error('Cycle error:', e)); }, ms);
   }
 }
 
@@ -104,6 +113,34 @@ function parseEntityNumber(raw) {
   const s = String(raw).trim().replace(/(\d),(?=\d{3}(\D|$))/g, '$1');
   const match = s.match(/-?\d+(\.\d+)?/);
   return match ? parseFloat(match[0]) : NaN;
+}
+
+// A screen can carry "hide rules" so it's skipped by auto-cycle and the
+// device falls back to the no-active-screen placeholder if it's the one
+// currently active — e.g. don't show the grill-temp screen once the probe
+// goes unavailable, or the AC screen once the room's above a threshold.
+// A screen with no rules is never hidden; with any rules, matching ANY one
+// of them hides it (OR, not AND) — that matches how people describe these
+// ("hide if it's unknown, OR if it's above 80").
+async function ruleMatches(rule) {
+  const state = await haFetch(`/api/states/${encodeURIComponent(rule.entityId)}`);
+  // Can't reach HA or the entity doesn't exist — as good as "unavailable"
+  // for a state-equality check; a numeric comparison just can't fire.
+  const rawState = state ? state.state : 'unavailable';
+  if (rule.type === 'above' || rule.type === 'below') {
+    const num = parseEntityNumber(rawState);
+    if (Number.isNaN(num) || rule.value == null) return false;
+    return rule.type === 'above' ? num > rule.value : num < rule.value;
+  }
+  return rawState.toLowerCase() === String(rule.value ?? '').toLowerCase();
+}
+
+async function isScreenHidden(screen) {
+  const rules = screen.hideRules || [];
+  for (const rule of rules) {
+    if (rule.entityId && await ruleMatches(rule)) return true;
+  }
+  return false;
 }
 
 // Pick the color for the highest colorRules threshold the value meets or
@@ -161,9 +198,29 @@ app.get('/api/screens', (req, res) => {
     isAnimated: s.isAnimated,
     frameCount: s.frames?.length || 1,
     createdAt: s.createdAt,
-    updatedAt: s.updatedAt
+    updatedAt: s.updatedAt,
+    hideRules: s.hideRules || []
   }));
   res.json({ screens, activeScreenId: data.activeScreenId });
+});
+
+// Reorder screens — also determines auto-cycle order, since that just walks
+// this same array. Body: { order: [screenId, ...] }, must be a permutation
+// of every existing screen id.
+app.post('/api/screens/reorder', (req, res) => {
+  const data = loadData();
+  const order = req.body.order;
+  const valid = Array.isArray(order)
+    && order.length === data.screens.length
+    && new Set(order).size === data.screens.length
+    && order.every(id => data.screens.some(s => s.id === id));
+  if (!valid) {
+    return res.status(400).json({ error: 'order must contain every existing screen id exactly once' });
+  }
+  const byId = new Map(data.screens.map(s => [s.id, s]));
+  data.screens = order.map(id => byId.get(id));
+  saveData(data);
+  res.json({ screens: data.screens.map(s => ({ id: s.id, name: s.name })) });
 });
 
 // Get single screen with full data
@@ -209,6 +266,7 @@ app.put('/api/screens/:id', (req, res) => {
     frames: req.body.frames ?? data.screens[index].frames,
     isAnimated: req.body.isAnimated ?? data.screens[index].isAnimated,
     frameDelay: req.body.frameDelay ?? data.screens[index].frameDelay,
+    hideRules: req.body.hideRules ?? data.screens[index].hideRules,
     updatedAt: new Date().toISOString()
   };
   saveData(data);
@@ -583,7 +641,7 @@ function compositeFramePixels(elements) {
 app.get('/api/esp/pixels', async (req, res) => {
   const data = loadData();
   const screen = data.activeScreenId ? data.screens.find(s => s.id === data.activeScreenId) : null;
-  if (!screen) {
+  if (!screen || await isScreenHidden(screen)) {
     return res.json({ id: null, name: null, isAnimated: false, frameDelay: 200, frameCount: 0, frames: [] });
   }
 
@@ -611,7 +669,7 @@ app.get('/api/esp/binary', async (req, res) => {
   }
 
   const screen = data.screens.find(s => s.id === data.activeScreenId);
-  if (!screen) {
+  if (!screen || await isScreenHidden(screen)) {
     return res.send(Buffer.from([0]));
   }
 
@@ -651,13 +709,15 @@ app.get('/api/esp/binary', async (req, res) => {
 });
 
 // ESP32 endpoint - simple status check
-app.get('/api/esp/status', (req, res) => {
+app.get('/api/esp/status', async (req, res) => {
   const data = loadData();
   const screen = data.activeScreenId ? data.screens.find(s => s.id === data.activeScreenId) : null;
+  const hidden = screen ? await isScreenHidden(screen) : false;
   res.json({
-    hasActiveScreen: !!screen,
+    hasActiveScreen: !!screen && !hidden,
     activeScreenId: data.activeScreenId,
     activeScreenName: screen?.name,
+    activeScreenHidden: hidden,
     screenCount: data.screens.length,
     timestamp: Date.now()
   });
