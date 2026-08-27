@@ -149,14 +149,6 @@ number:
     initial_value: 128
     optimistic: true
   - platform: template
-    name: "Animation Speed"
-    id: anim_speed
-    min_value: 1
-    max_value: 10
-    step: 1
-    initial_value: 5
-    optimistic: true
-  - platform: template
     name: "Min Brightness"
     id: min_brightness
     min_value: 10
@@ -410,10 +402,20 @@ interval:
                   int delay_ms = 200;
                   extract_int(resp_body, 0, "frameDelay", delay_ms);
 
+                  bool had_frames = !id(md_frame_buffers).empty();
+                  size_t new_count = new_frames.size();
+
                   id(md_frame_buffers) = std::move(new_frames);
                   id(md_frame_delay) = delay_ms > 0 ? delay_ms : 200;
-                  id(md_current_frame) = 0;
-                  id(md_last_frame_time) = millis();
+
+                  // Only reset playback position on the first design or if the
+                  // frame count shrank past it - otherwise every poll (every 3s)
+                  // would snap the animation back to frame 0, masking whatever
+                  // speed the frameDelay is actually set to.
+                  if (!had_frames || (size_t) id(md_current_frame) >= new_count) {
+                    id(md_current_frame) = 0;
+                    id(md_last_frame_time) = millis();
+                  }
                   id(md_has_design) = true;
 
                   ESP_LOGI("md_poll", "Applied %d frame(s), %d pixels total, %dms/frame",
