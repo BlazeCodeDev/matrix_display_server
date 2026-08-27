@@ -1698,22 +1698,34 @@ const App = () => {
 
   // Stamps a size×size block of pixel elements centered on `center` in one
   // history step (rather than one addElement call per cell, which would
-  // spam the undo stack while dragging). Skips cells that already have a
-  // pixel there so redundant strokes over the same spot don't pile up
-  // duplicate elements.
+  // spam the undo stack while dragging). A cell that already has a pixel
+  // gets recolored in place instead of being skipped or duplicated, so
+  // drawing over existing pixels replaces their color as expected.
   const paintBrush = (center, size, color) => {
-    const offsets = getBrushOffsets(size);
-    const existing = new Set(elements.filter(el => el.type === 'pixel').map(el => `${el.x},${el.y}`));
-    const toAdd = [];
-    for (const { dx, dy } of offsets) {
+    const targets = new Map();
+    for (const { dx, dy } of getBrushOffsets(size)) {
       const x = center.x + dx, y = center.y + dy;
       if (x < 0 || x >= CANVAS_WIDTH || y < 0 || y >= CANVAS_HEIGHT) continue;
-      const key = `${x},${y}`;
-      if (existing.has(key)) continue;
-      existing.add(key);
-      toAdd.push({ type: 'pixel', x, y, color: { ...color } });
+      targets.set(`${x},${y}`, { x, y });
     }
-    if (toAdd.length) addElements(toAdd);
+    if (!targets.size) return;
+
+    setElements(prev => {
+      const matched = new Set();
+      const updated = prev.map(el => {
+        if (el.type !== 'pixel') return el;
+        const key = `${el.x},${el.y}`;
+        if (!targets.has(key)) return el;
+        matched.add(key);
+        return { ...el, color: { ...color } };
+      });
+      const additions = [];
+      targets.forEach((pt, key) => {
+        if (matched.has(key)) return;
+        additions.push({ type: 'pixel', x: pt.x, y: pt.y, color: { ...color }, id: Date.now() + Math.random() + additions.length });
+      });
+      return [...updated, ...additions];
+    });
   };
 
   // Eraser tool's counterpart: removes any element touching any cell in the
