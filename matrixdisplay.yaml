@@ -204,9 +204,20 @@ globals:
   - id: last_ldr_check
     type: unsigned long
     initial_value: '0'
-  # 64x32 RGB framebuffer polled from matrix_display_server, one byte per channel.
-  - id: md_framebuffer
-    type: uint8_t[6144]
+  # Animation frames polled from matrix_display_server: each entry is a
+  # 64x32 RGB framebuffer (one byte per channel, 6144 bytes). Replaced
+  # wholesale on each successful poll; played back at md_frame_delay ms/frame.
+  - id: md_frame_buffers
+    type: std::vector<std::vector<uint8_t>>
+  - id: md_frame_delay
+    type: int
+    initial_value: '200'
+  - id: md_current_frame
+    type: int
+    initial_value: '0'
+  - id: md_last_frame_time
+    type: unsigned long
+    initial_value: '0'
   - id: md_has_design
     type: bool
     initial_value: 'false'
@@ -328,54 +339,85 @@ interval:
 
                   size_t outer_start = resp_body.find('[', frames_pos);
                   if (outer_start == std::string::npos) return;
-                  size_t frame_start = resp_body.find('[', outer_start + 1);
-                  if (frame_start == std::string::npos) {
+
+                  // Find the matching close bracket for the whole "frames" array.
+                  int outer_depth = 0;
+                  size_t outer_end = std::string::npos;
+                  for (size_t i = outer_start; i < resp_body.length(); i++) {
+                    if (resp_body[i] == '[') outer_depth++;
+                    else if (resp_body[i] == ']') {
+                      outer_depth--;
+                      if (outer_depth == 0) { outer_end = i; break; }
+                    }
+                  }
+                  if (outer_end == std::string::npos) return;
+
+                  std::vector<std::vector<uint8_t>> new_frames;
+                  int total_pixels = 0;
+                  size_t search_pos = outer_start + 1;
+
+                  // Walk each [ ... ] frame inside the outer frames array.
+                  while (search_pos < outer_end) {
+                    size_t frame_start = resp_body.find('[', search_pos);
+                    if (frame_start == std::string::npos || frame_start > outer_end) break;
+
+                    int depth = 0;
+                    size_t frame_end = std::string::npos;
+                    for (size_t i = frame_start; i <= outer_end; i++) {
+                      if (resp_body[i] == '[') depth++;
+                      else if (resp_body[i] == ']') {
+                        depth--;
+                        if (depth == 0) { frame_end = i; break; }
+                      }
+                    }
+                    if (frame_end == std::string::npos) break;
+
+                    std::vector<uint8_t> fb(6144, 0);
+                    size_t pos = frame_start;
+                    while (true) {
+                      size_t obj_start = resp_body.find('{', pos);
+                      if (obj_start == std::string::npos || obj_start > frame_end) break;
+                      size_t obj_end = resp_body.find('}', obj_start);
+                      if (obj_end == std::string::npos || obj_end > frame_end) break;
+
+                      int x = -1, y = -1, r = 0, g = 0, b = 0;
+                      extract_int(resp_body, obj_start, "x", x);
+                      extract_int(resp_body, obj_start, "y", y);
+                      extract_int(resp_body, obj_start, "r", r);
+                      extract_int(resp_body, obj_start, "g", g);
+                      extract_int(resp_body, obj_start, "b", b);
+
+                      if (x >= 0 && x < 64 && y >= 0 && y < 32) {
+                        int i = (y * 64 + x) * 3;
+                        fb[i] = (uint8_t) r;
+                        fb[i + 1] = (uint8_t) g;
+                        fb[i + 2] = (uint8_t) b;
+                        total_pixels++;
+                      }
+
+                      pos = obj_end + 1;
+                    }
+
+                    new_frames.push_back(std::move(fb));
+                    search_pos = frame_end + 1;
+                  }
+
+                  if (new_frames.empty()) {
                     ESP_LOGI("md_poll", "No active screen (frames is empty)");
                     return;
                   }
 
-                  // Find the matching close bracket for the first frame's pixel array.
-                  int depth = 0;
-                  size_t frame_end = std::string::npos;
-                  for (size_t i = frame_start; i < resp_body.length(); i++) {
-                    if (resp_body[i] == '[') depth++;
-                    else if (resp_body[i] == ']') {
-                      depth--;
-                      if (depth == 0) { frame_end = i; break; }
-                    }
-                  }
-                  if (frame_end == std::string::npos) return;
+                  int delay_ms = 200;
+                  extract_int(resp_body, 0, "frameDelay", delay_ms);
 
-                  for (int i = 0; i < 6144; i++) id(md_framebuffer)[i] = 0;
-
-                  size_t pos = frame_start;
-                  int applied = 0;
-                  while (true) {
-                    size_t obj_start = resp_body.find('{', pos);
-                    if (obj_start == std::string::npos || obj_start > frame_end) break;
-                    size_t obj_end = resp_body.find('}', obj_start);
-                    if (obj_end == std::string::npos || obj_end > frame_end) break;
-
-                    int x = -1, y = -1, r = 0, g = 0, b = 0;
-                    extract_int(resp_body, obj_start, "x", x);
-                    extract_int(resp_body, obj_start, "y", y);
-                    extract_int(resp_body, obj_start, "r", r);
-                    extract_int(resp_body, obj_start, "g", g);
-                    extract_int(resp_body, obj_start, "b", b);
-
-                    if (x >= 0 && x < 64 && y >= 0 && y < 32) {
-                      int i = (y * 64 + x) * 3;
-                      id(md_framebuffer)[i] = (uint8_t) r;
-                      id(md_framebuffer)[i + 1] = (uint8_t) g;
-                      id(md_framebuffer)[i + 2] = (uint8_t) b;
-                      applied++;
-                    }
-
-                    pos = obj_end + 1;
-                  }
-
-                  ESP_LOGI("md_poll", "Applied %d pixels", applied);
+                  id(md_frame_buffers) = std::move(new_frames);
+                  id(md_frame_delay) = delay_ms > 0 ? delay_ms : 200;
+                  id(md_current_frame) = 0;
+                  id(md_last_frame_time) = millis();
                   id(md_has_design) = true;
+
+                  ESP_LOGI("md_poll", "Applied %d frame(s), %d pixels total, %dms/frame",
+                           (int) id(md_frame_buffers).size(), total_pixels, id(md_frame_delay));
 
 font:
   - file:
@@ -422,11 +464,19 @@ display:
       Color white_c = Color(uint8_t(255*br), uint8_t(255*br), uint8_t(255*br));
       Color dim_c = Color(uint8_t(40*br), uint8_t(40*br), uint8_t(40*br));
 
-      if (id(md_has_design)) {
+      if (id(md_has_design) && !id(md_frame_buffers).empty()) {
+        if (id(md_frame_buffers).size() > 1) {
+          unsigned long now = millis();
+          if (now - id(md_last_frame_time) >= (unsigned long) id(md_frame_delay)) {
+            id(md_current_frame) = (id(md_current_frame) + 1) % id(md_frame_buffers).size();
+            id(md_last_frame_time) = now;
+          }
+        }
+        const std::vector<uint8_t> &fb = id(md_frame_buffers)[id(md_current_frame)];
         for (int y = 0; y < 32; y++) {
           for (int x = 0; x < 64; x++) {
             int i = (y * 64 + x) * 3;
-            uint8_t r = id(md_framebuffer)[i], g = id(md_framebuffer)[i+1], b = id(md_framebuffer)[i+2];
+            uint8_t r = fb[i], g = fb[i+1], b = fb[i+2];
             if (r || g || b)
               it.draw_pixel_at(x, y, Color(uint8_t(r*br), uint8_t(g*br), uint8_t(b*br)));
           }
